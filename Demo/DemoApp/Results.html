@@ -1,0 +1,2970 @@
+{% extends "otree/Page.html" %}
+{% load otree static %}
+
+{% block title %}Meeting Analysis Results{% endblock %}
+
+{% block content %}
+<div class="container">
+    <!-- Loading Screen -->
+    <div id="loadingSection">
+        <img src="{% static 'global/loading-icon.gif' %}" alt="Loading" width="64" height="64"/>
+        <div class="loading-progress">
+            <div class="progress">
+                <div id="loadingProgress" class="progress-bar progress-bar-striped progress-bar-animated"
+                     role="progressbar" style="width: 0%">
+                </div>
+            </div>
+        </div>
+        <div id="loadingText" class="loading-text">Loading models...</div>
+    </div>
+
+    <!-- Main Content -->
+    <div id="mainContent" style="display: none;">
+        <div class="container-fluid">
+            <!-- Top row with video and active visualization -->
+            <div class="row mb-4">
+                <!-- Video column -->
+                <div class="col-md-6">
+                    <div class="video-section">
+                        <video id="videoPlayer" class="video-player" controls>
+                            <source src="{{ static video_path }}" type="video/mp4">
+                        </video>
+                    </div>
+                </div>
+
+                <!-- Active visualization column -->
+                <div class="col-md-6">
+                    <div id="activeVisualization" class="active-viz-container">
+                        <!-- Active visualization will be displayed here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Visualization controls -->
+            <div class="row mb-3">
+                <div class="col-12">
+                    <div class="viz-controls">
+                        <label for="vizSelector" class="viz-label">Select Visualization:</label>
+                        <select id="vizSelector" class="form-select">
+                            <option value="overall-sentiment">Team Sentiment Analysis</option>
+                            <option value="sentiment-timeline">Sentiment Timeline</option>
+                            <option value="interaction-balance">Participation Balance</option>
+                            <option value="response-dynamics">Response Dynamics</option>
+                            <option value="info-sharing">Information Sharing</option>
+                            <option value="discussion-quality">Discussion Quality</option>
+                            <option value="topic-analysis">Topic Analysis & Consensus</option>
+                            <option value="speaker-polygon">Speaker Polygon</option>
+                            <option value="turn-taking">Turn Taking Analysis</option>
+                            <option value="objectivity">Meeting Objectivity</option>
+                            <option value="knowledge-tracking">Knowledge Tracking</option>
+                            <option value="filler-analysis">Filler Word Analysis</option>
+
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Progress bar for analysis -->
+            <div id="analysisProgress">
+                <div class="progress">
+                    <div class="progress-bar" role="progressbar" style="width: 100%"></div>
+                </div>
+                <p>Analyzing video...</p>
+            </div>
+
+            <!-- Minimized visualizations container -->
+            <div class="row">
+                <div class="col-12">
+                    <div id="minimizedVisualizations" class="minimized-viz-container">
+                        <!-- Minimized versions of inactive visualizations will appear here -->
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcript section -->
+            <div class="row mt-4">
+                <div class="col-12">
+                    <div id="transcript" class="transcript-section card">
+                        <div class="card-body">
+                            <h5 class="card-title">Transcript</h5>
+                            <div class="transcript-content"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Add Chart.js and D3.js -->
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+
+<script>
+    // Visualization Manager Class
+    class VisualizationManager {
+    constructor() {
+        this.activeVizId = 'overall-sentiment';
+        this.vizContainer = document.getElementById('activeVisualization');
+        this.minimizedContainer = document.getElementById('minimizedVisualizations');
+        this.selector = document.getElementById('vizSelector');
+        this.visualizationData = {};
+
+        this.uiState = {
+          toggleStates: {},
+          scrollPositions: {},
+            lastActiveViz: null
+        };
+
+        this.setupEventListeners();
+        this.restoreState();
+    }
+    saveState() {
+        localStorage.setItem('vizManagerState', JSON.stringify({
+            toggleStates: this.uiState.toggleStates,
+            scrollPositions: this.uiState.scrollPositions,
+            lastActiveViz: this.activeVizId
+        }));
+    }
+
+    // Restore saved UI state
+    restoreState() {
+        try {
+            const savedState = localStorage.getItem('vizManagerState');
+            if (savedState) {
+                const state = JSON.parse(savedState);
+                this.uiState = state;
+                this.activeVizId = state.lastActiveViz || this.activeVizId;
+                this.selector.value = this.activeVizId;
+            }
+        } catch (e) {
+            console.warn('Failed to restore UI state:', e);
+        }
+    }
+
+    // Save scroll position for current visualization
+    saveScrollPosition(vizId) {
+        const container = document.querySelector('.active-viz-container');
+        if (container) {
+            this.uiState.scrollPositions[vizId] = container.scrollTop;
+            this.saveState();
+        }
+    }
+
+    // Restore scroll position for visualization
+    restoreScrollPosition(vizId) {
+        const container = document.querySelector('.active-viz-container');
+        if (container && this.uiState.scrollPositions[vizId] !== undefined) {
+            setTimeout(() => {
+                container.scrollTop = this.uiState.scrollPositions[vizId];
+            }, 100);
+        }
+    }
+
+    // Save toggle state
+    saveToggleState(vizId, toggleId, state) {
+        if (!this.uiState.toggleStates[vizId]) {
+            this.uiState.toggleStates[vizId] = {};
+        }
+        this.uiState.toggleStates[vizId][toggleId] = state;
+        this.saveState();
+    }
+
+    // Get saved toggle state
+    getToggleState(vizId, toggleId) {
+        return this.uiState.toggleStates[vizId]?.[toggleId] ?? false;
+    }
+
+    setupEventListeners() {
+        // Existing selector event listener
+        this.selector.addEventListener('change', (e) => {
+            this.saveScrollPosition(this.activeVizId);
+            this.setActiveVisualization(e.target.value);
+        });
+
+        // Add scroll event listener
+        document.querySelector('.active-viz-container')?.addEventListener('scroll', () => {
+            this.saveScrollPosition(this.activeVizId);
+        });
+    }
+
+    updateData(data) {
+        this.visualizationData = data;
+        this.saveScrollPosition(this.activeVizId);
+        this.updateAllVisualizations();
+        this.updateTranscript(data);
+        this.restoreScrollPosition(this.activeVizId);
+    }
+
+    saveState(){
+        localStorage.setItem('vizManagerState',JSON.stringify({
+            toggleStates: this.uiState.toggleStates,
+            scrollPositions: this.uiState.scrollPositions,
+            lastActiveViz: this.activeVizId
+        }));
+    }
+
+    setupEventListeners() {
+        this.selector.addEventListener('change', (e) => {
+            this.setActiveVisualization(e.target.value);
+        });
+    }
+
+    updateData(data) {
+        this.visualizationData = data;
+        this.updateAllVisualizations();
+        this.updateTranscript(data);
+    }
+
+    setActiveVisualization(vizId) {
+        this.activeVizId = vizId;
+        this.updateAllVisualizations();
+    }
+
+    updateAllVisualizations() {
+        // Update active visualization
+        this.vizContainer.innerHTML = this.createVisualization(this.activeVizId, true);
+
+        // Update minimized visualizations
+        this.minimizedContainer.innerHTML = '';
+        ['overall-sentiment', 'sentiment-timeline', 'interaction-balance','response-dynamics','info-sharing','discussion-quality', 'topic-analysis', 'speaker-polygon', 'turn-taking', 'objectivity', 'knowledge-tracking', 'filler-analysis'].forEach(vizId => {
+            if (vizId !== this.activeVizId) {
+                const minimizedViz = document.createElement('div');
+                minimizedViz.className = 'minimized-viz';
+                minimizedViz.innerHTML = this.createVisualization(vizId, false);
+                minimizedViz.onclick = () => {
+                    this.selector.value = vizId;
+                    this.setActiveVisualization(vizId);
+                }
+                this.minimizedContainer.appendChild(minimizedViz);
+            }
+        });
+    }
+
+    updateTranscript(data) {
+    const transcriptContent = document.querySelector('.transcript-content');
+    let html = '';
+
+    // Helper function for objectivity emoji (same as in createObjectivityViz)
+    const getObjectivityIcon = (subjectivity) => {
+        if (subjectivity <= 0.2) return '📊';
+        if (subjectivity <= 0.4) return '📋';
+        if (subjectivity <= 0.6) return '💭';
+        if (subjectivity <= 0.8) return '💫';
+        return '🎭';
+    };
+
+    if (data.transcript) {
+        data.transcript.forEach(segment => {
+            html += `
+                <div class="transcript-segment">
+                    <span class="speaker-label">${segment.speaker}</span>
+                    <span class="timestamp">${segment.start.toFixed(1)}s - ${segment.end.toFixed(1)}s</span>
+                    <div class="sentiment-indicators">
+                        <span class="sentiment-emoji small" title="Emotional Tone">
+                            ${getSentimentEmoji(segment.sentiment.polarity)}
+                        </span>
+                        <span class="objectivity-emoji small" title="Factual vs Opinion">
+                            ${getObjectivityIcon(segment.sentiment.subjectivity)}
+                        </span>
+                    </div>
+                    <p class="segment-text">${segment.text}</p>
+                </div>
+            `;
+        });
+    }
+    transcriptContent.innerHTML = html;
+}
+
+    createVisualization(vizId, isActive) {
+        const data = this.visualizationData;
+        const size = isActive ? 'large' : 'small';
+
+        switch(vizId) {
+            case 'overall-sentiment':
+                return this.createTeamSentimentViz(data, size);
+            case 'sentiment-timeline':
+                return this.createSentimentTimelineViz(data, size);
+            case 'interaction-balance':
+                return this.createInteractionBalanceViz(data, size);
+            case 'response-dynamics':
+                return this.createResponseDynamicsViz(data, size);
+            case 'info-sharing':
+                return this.createInfoSharingViz(data,size);
+            case 'discussion-quality':
+                return this.createDiscussionQualityViz(data,size);
+            case 'topic-analysis':
+                return this.createTopicConsensusViz(data, size);
+            case 'speaker-polygon':
+                return this.createSpeakerPolygonViz(data, size);
+            case 'turn-taking':
+                return this.createTurnTakingViz(data, size);
+            case 'objectivity':
+                return this.createObjectivityViz(data, size);
+            case 'knowledge-tracking':
+                return this.createKnowledgeTrackingViz(data,size);
+            case 'filler-analysis':
+                return this.createFillerAnalysisViz(data, size);
+            default:
+                return '<p>Visualization not found</p>';
+        }
+    }
+
+    createSpeakerPolygonViz(data, size) {
+    if (!data?.speaker_statistics) {
+        return this.createLoadingState('Speaker Distribution');
+    }
+
+    const containerId = `speaker-polygon-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = size === 'large' ? '400px' : '150px';
+
+    const container = `
+        <div class="speaker-polygon-viz size-${size}">
+            <h4 class="viz-title">Speaker Distribution</h4>
+            <canvas id="${containerId}" style="height: ${containerHeight}; width: 100%;"></canvas>
+        </div>`;
+
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Set canvas size
+        const dimension = size === 'large' ? 400 : 150;
+        canvas.width = dimension;
+        canvas.height = dimension;
+
+        const centerX = dimension / 2;
+        const centerY = dimension / 2;
+        const radius = size === 'large' ? 150 : 50;
+
+        // Get speaker data
+        const speakers = Object.keys(data.speaker_statistics);
+        const percentages = speakers.map(speaker =>
+            data.speaker_statistics[speaker].speaking_time_percentage);
+        const colors = speakers.map((_, index) => {
+            const hue = (index * 137.508) % 360;
+            return `hsl(${hue}, 70%, 60%)`;
+        });
+
+        // Find dominant speaker
+        const maxPercentage = Math.max(...percentages);
+        const dominantSpeakerIndex = percentages.indexOf(maxPercentage);
+
+        // Calculate points for polygon
+        const points = [];
+        const angleStep = (2 * Math.PI) / speakers.length;
+
+        speakers.forEach((_, index) => {
+            const angle = index * angleStep - Math.PI / 2;
+            const x = centerX + radius * Math.cos(angle);
+            const y = centerY + radius * Math.sin(angle);
+            points.push({ x, y });
+        });
+
+        // Calculate center circle position based on dominant speaker
+        const dominantAngle = dominantSpeakerIndex * angleStep - Math.PI / 2;
+        const pullStrength = maxPercentage / 100; // How much the circle is pulled (0 to 1)
+        const maxOffset = radius * 0.5; // Maximum distance the circle can be pulled
+
+        const circleCenterX = centerX + (maxOffset * pullStrength * Math.cos(dominantAngle));
+        const circleCenterY = centerY + (maxOffset * pullStrength * Math.sin(dominantAngle));
+
+        // Draw lines from moved center to points
+        points.forEach((point, index) => {
+            const percentage = percentages[index] / 100;
+            const color = colors[index];
+
+            // Draw line
+            ctx.beginPath();
+            ctx.moveTo(circleCenterX, circleCenterY);
+            ctx.lineTo(point.x, point.y);
+            ctx.strokeStyle = `${color}${Math.round(percentage * 255).toString(16).padStart(2, '0')}`;
+            ctx.lineWidth = Math.max(1, percentage * 10);
+            ctx.stroke();
+
+            // Draw node
+            ctx.beginPath();
+            ctx.arc(point.x, point.y, size === 'large' ? 10 : 5, 0, 2 * Math.PI);
+            ctx.fillStyle = percentages[index] > 0 ? color : '#ccc';
+            ctx.fill();
+
+            // Add label if large size
+            if (size === 'large') {
+                ctx.fillStyle = percentages[index] > 0 ? color : '#666';
+                ctx.font = '12px Arial';
+                ctx.textAlign = 'center';
+                ctx.fillText(speakers[index], point.x, point.y + 25);
+                ctx.fillText(`${percentages[index].toFixed(1)}%`, point.x, point.y + 40);
+            }
+        });
+
+        // Draw center circle in new position
+        ctx.beginPath();
+        ctx.arc(circleCenterX, circleCenterY, size === 'large' ? 20 : 8, 0, 2 * Math.PI);
+        ctx.fillStyle = '#4CAF50';
+        ctx.fill();
+
+    }, 100);
+
+    return container;
+}
+
+    createOverallSentimentViz(data, size) {
+    if (!data?.transcript?.length) {
+        return this.createLoadingState('Overall Sentiment');
+    }
+
+    // Calculate overall sentiment
+    const allSentiments = data.transcript.map(segment => segment.sentiment.polarity);
+    const averageSentiment = allSentiments.reduce((a, b) => a + b, 0) / allSentiments.length;
+
+    const emojiSize = size === 'large' ? '3em' : '1.5em';
+    const gaugeWidth = size === 'large' ? '300px' : '150px';
+
+    // Start with overall mood
+    let html = `
+        <div class="overall-sentiment-viz size-${size}">
+            <h4 class="viz-title">Overall Meeting Mood</h4>
+            <div class="sentiment-display">
+                <span class="sentiment-emoji" style="font-size: ${emojiSize}">
+                    ${getSentimentEmoji(averageSentiment)}
+                </span>
+                <div class="sentiment-gauge" style="width: ${gaugeWidth}">
+                    <div class="gauge-background">
+                        <div class="gauge-marker" style="left: ${(averageSentiment + 1) * 50}%"></div>
+                    </div>
+                    <div class="gauge-labels">
+                        <span>Negative</span>
+                        <span>Neutral</span>
+                        <span>Positive</span>
+                    </div>
+                </div>
+            </div>`;
+
+    // Add speaker sentiments if in large mode
+    if (size === 'large' && data.speaker_statistics) {
+        html += `
+            <div class="speaker-sentiments mt-4">
+                <h5 class="text-center mb-3">Speaker Sentiments</h5>
+                <div class="speaker-sentiment-grid">`;
+
+        for (const [speaker, stats] of Object.entries(data.speaker_statistics)) {
+            if (stats.sentiment && stats.sentiment.average_polarity !== undefined) {
+                const speakerSentiment = stats.sentiment.average_polarity;
+                html += `
+                    <div class="speaker-sentiment-card">
+                        <div class="speaker-label">${speaker}</div>
+                        <div class="sentiment-display">
+                            <span class="sentiment-emoji small">
+                                ${getSentimentEmoji(speakerSentiment)}
+                            </span>
+                            <div class="sentiment-gauge" style="width: ${gaugeWidth}">
+                                <div class="gauge-background">
+                                    <div class="gauge-marker" style="left: ${(speakerSentiment + 1) * 50}%"></div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+        }
+
+        html += `
+                </div>
+            </div>`;
+    }
+
+    html += '</div>';
+    return html;
+}
+    createTeamSentimentViz(data, size) {
+    if (!data?.team_metrics?.sentiment_alignment) {
+        return this.createLoadingState('Team Sentiment Analysis');
+    }
+
+    const alignmentScore = data.team_metrics.sentiment_alignment.current_score;
+    const averageAlignment = data.team_metrics.sentiment_alignment.average_score;
+    const toggleId = 'sentimentDetailToggle';
+    const savedToggleState = this.getToggleState('overall-sentiment', toggleId);
+
+    // Calculate overall meeting mood
+    const allSentiments = data.transcript?.map(segment => segment.sentiment.polarity) || [];
+    const averageSentiment = allSentiments.length > 0
+        ? allSentiments.reduce((a, b) => a + b, 0) / allSentiments.length
+        : 0;
+
+    // Get mood label based on sentiment
+    const getMoodLabel = (sentiment) => {
+        if (sentiment <= -0.6) return ['Very Negative', 'text-danger'];
+        if (sentiment <= -0.2) return ['Negative', 'text-warning'];
+        if (sentiment <= 0.2) return ['Neutral', 'text-secondary'];
+        if (sentiment <= 0.6) return ['Positive', 'text-info'];
+        return ['Very Positive', 'text-success'];
+    };
+
+    const [moodLabel, moodClass] = getMoodLabel(averageSentiment);
+
+    // Minimized view with circular progress
+    if (size !== 'large') {
+        return `
+            <div class="team-sentiment-viz size-${size}">
+                <h4 class="viz-title">Team Sentiment Alignment Score</h4>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#673AB7 ${alignmentScore * 100}%, #eee ${alignmentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(alignmentScore * 100).toFixed(0)}%
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    // Maximized view with circular progress and average score
+    let html = `
+        <div class="team-sentiment-viz size-${size}">
+            <h4 class="viz-title">Team Sentiment Analysis</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Team Alignment Score</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#673AB7 ${alignmentScore * 100}%, #eee ${alignmentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(alignmentScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Alignment: ${(averageAlignment * 100).toFixed(1)}%</div>
+
+                <div class="sentiment-section mt-3">
+                    <div class="overall-mood-label">Overall Meeting Mood</div>
+                    <div class="mood-value ${moodClass}">
+                        ${moodLabel}
+                        <span class="sentiment-emoji ms-2">${getSentimentEmoji(averageSentiment)}</span>
+                    </div>
+                </div>
+            </div>
+
+            <div class="viz-controls mb-3">
+                <label class="switch">
+                    <input type="checkbox" id="${toggleId}" ${savedToggleState ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                </label>
+                <span class="ms-2">Show Individual Analysis (Beta)</span>
+            </div>
+
+            <div id="sentimentDetail" class="sentiment-detail" style="display: ${savedToggleState ? 'block' : 'none'}">
+                ${this.createOverallSentimentViz(data, size)}
+            </div>
+        </div>`;
+
+    // Add event listener after render
+    setTimeout(() => {
+        const toggle = document.getElementById(toggleId);
+        const detail = document.getElementById('sentimentDetail');
+        if (toggle && detail) {
+            toggle.addEventListener('change', (e) => {
+                detail.style.display = e.target.checked ? 'block' : 'none';
+                this.saveToggleState('overall-sentiment', toggleId, e.target.checked);
+            });
+        }
+    }, 100);
+
+    return html;
+}
+
+    createResponseDynamicsViz(data, size) {
+    if (!data?.team_metrics?.response_latency) {
+        return this.createLoadingState('Response Dynamics');
+    }
+
+    const currentScore = data.team_metrics.response_latency.current_score;
+    const avgScore = data.team_metrics.response_latency.average_score;
+    const timeline = data.team_metrics.response_latency.timeline;
+
+    // Minimized view with circular progress
+    if (size !== 'large') {
+        return `
+            <div class="response-dynamics-viz size-${size}">
+                <h4 class="viz-title">Response Score</h4>
+                <div class="progress-circular" style="background: conic-gradient(#FF9800 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(0)}%
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    const containerId = `response-dynamics-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = '350px';
+
+    const container = `
+        <div class="response-dynamics-viz size-${size}">
+            <h4 class="viz-title">Response Dynamics</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Response Score</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#FF9800 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Response Score: ${(avgScore * 100).toFixed(1)}%</div>
+            </div>
+
+            <div class="chart-container" style="height: ${containerHeight};">
+                <canvas id="${containerId}"></canvas>
+            </div>
+        </div>`;
+
+    // Chart initialization code remains the same
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (window.responseChart) {
+            window.responseChart.destroy();
+        }
+
+        window.responseChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: timeline.map(point => point.time.toFixed(1)),
+                datasets: [{
+                    label: 'Response Score',
+                    data: timeline.map(point => point.score),
+                    borderColor: '#FF9800',
+                    backgroundColor: 'rgba(255, 152, 0, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 1,
+                        ticks: {
+                            callback: value => `${(value * 100).toFixed(0)}%`
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large'
+                    }
+                }
+            }
+        });
+    }, 100);
+
+    return container;
+}
+
+    createSentimentTimelineViz(data, size) {
+        if (!data?.transcript?.length) {
+            return this.createLoadingState('Sentiment Timeline');
+        }
+
+        const containerId = `sentiment-timeline-${Math.random().toString(36).substr(2, 9)}`;
+        const containerHeight = size === 'large' ? '350px' : '150px';
+
+        // Create container with canvas element
+        const container = `
+            <div class="sentiment-timeline-viz size-${size}">
+                <h4 class="viz-title">Sentiment Timeline</h4>
+                <canvas id="${containerId}" style="height: ${containerHeight}; width: 100%;"></canvas>
+            </div>`;
+
+        // Schedule chart creation after container is added to DOM
+        setTimeout(() => {
+            const canvas = document.getElementById(containerId);
+            if (!canvas) {
+                console.error('Canvas element not found:', containerId);
+                return;
+            }
+
+            try {
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    console.error('Could not get canvas context');
+                    return;
+                }
+
+                if (window.sentimentChart) {
+                    window.sentimentChart.destroy();
+                }
+
+                window.sentimentChart = new Chart(ctx, {
+                    type: 'line',
+                    data: {
+                        labels: data.transcript.map(segment => segment.start.toFixed(1)),
+                        datasets: [{
+                            label: 'Sentiment',
+                            data: data.transcript.map(segment => segment.sentiment.polarity),
+                            borderColor: 'rgb(75, 192, 192)',
+                            tension: 0.3,
+                            fill: false
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        scales: {
+                            y: {
+                                min: -1,
+                                max: 1,
+                                display: size === 'large',
+                                title: {
+                                    display: size === 'large',
+                                    text: 'Sentiment (Negative → Positive) '
+                                },
+                                ticks: {
+                                    callback: function(value) {
+                                    if (value === -1) return 'Negative';
+                                    if (value === 0) return 'Neutral';
+                                    if (value === 1) return 'Positive';
+                                    return '';
+                                    }
+                                }
+                            },
+                            x: {
+                                display: size === 'large',
+                                title: {
+                                    display: size === 'large',
+                                    text: 'Time (seconds)'
+                                }
+                            }
+                        },
+                        plugins: {
+                            legend: {
+                                display: size === 'large'
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error creating sentiment timeline chart:', error);
+            }
+        }, 100);  // Increased timeout to ensure DOM is ready
+
+        return container;
+    }
+
+
+    createSpeakingTimeViz(data, size) {
+        if (!data?.speaker_statistics) {
+            return this.createLoadingState('Speaking Time');
+        }
+
+        const containerId = `speaking-time-${Math.random().toString(36).substr(2, 9)}`;
+        const containerHeight = size === 'large' ? '350px' : '150px';
+
+        // Create container with canvas element
+        const container = `
+            <div class="speaking-time-viz size-${size}">
+                <h4 class="viz-title">Speaking Time Distribution</h4>
+                <canvas id="${containerId}" style="height: ${containerHeight}; width: 100%;"></canvas>
+            </div>`;
+
+        // Schedule chart creation after container is added to DOM
+        setTimeout(() => {
+            const canvas = document.getElementById(containerId);
+            if (!canvas) {
+                console.error('Canvas element not found:', containerId);
+                return;
+            }
+
+            try {
+                const ctx = canvas.getContext('2d');
+                if (!ctx) {
+                    console.error('Could not get canvas context');
+                    return;
+                }
+
+                if (window.speakingTimeChart) {
+                    window.speakingTimeChart.destroy();
+                }
+
+                const speakers = Object.keys(data.speaker_statistics);
+                const percentages = speakers.map(speaker =>
+                    data.speaker_statistics[speaker].speaking_time_percentage);
+                const colors = speakers.map((_, index) => {
+                    const hue = (index * 137.508) % 360;
+                    return `hsl(${hue}, 70%, 60%)`;
+                });
+
+                window.speakingTimeChart = new Chart(ctx, {
+                    type: 'pie',
+                    data: {
+                        labels: speakers,
+                        datasets: [{
+                            data: percentages,
+                            backgroundColor: colors,
+                            borderWidth: 1
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                display: size === 'large',
+                                position: 'bottom'
+                            },
+                            title: {
+                                display: size === 'large',
+                                text: 'Speaking Time Distribution'
+                            }
+                        }
+                    }
+                });
+            } catch (error) {
+                console.error('Error creating speaking time chart:', error);
+            }
+        }, 100);  // Increased timeout to ensure DOM is ready
+
+        return container;
+    }
+
+    createTopicAnalysisViz(data, size) {
+    if (!data?.topics?.overall || !data?.topics?.per_speaker) {
+        return this.createLoadingState('Topic Analysis');
+    }
+
+    const topicBubbleSize = size === 'large' ? 'normal' : 'small';
+    const maxSpeakers = size === 'large' ? Infinity : 2;
+
+    let html = `
+        <div class="topic-analysis-viz size-${size}">
+            <h4 class="viz-title">Topic Analysis</h4>
+            <div class="topic-overview">
+                <div class="overall-topic size-${topicBubbleSize}">
+                    <h5>Meeting Main Topic</h5>
+                    <div class="topic-bubble main">
+                        ${data.topics.overall[0]?.name || 'Analyzing...'}
+                    </div>
+                </div>
+            </div>`;
+
+    if (size === 'large') {
+        let speakerCount = 0;
+        html += '<div class="speaker-topics">';
+        for (const [speaker, speakerData] of Object.entries(data.topics.per_speaker)) {
+            if (speakerCount >= maxSpeakers) break;
+            if (speakerData.topics?.length > 0) {
+                const similarity = speakerData.topic_similarities[0]?.similarity_score || 0;
+                const similarityPercentage = (similarity * 100).toFixed(1);
+                const color = getSimilarityColor(similarity);
+
+                html += `
+                    <div class="speaker-topic-container">
+                        <h6>${speaker}'s Topic Focus</h6>
+                        <div class="topic-bubble" style="border-color: ${color}">
+                            ${speakerData.topics[0].name}
+                        </div>
+                        <div class="similarity-meter">
+                            <div class="similarity-label">Alignment with the meeting main topic</div>
+                            <div class="progress">
+                                <div class="progress-bar text-center"
+                                     style="width: ${similarityPercentage}%; background-color: ${color}"
+                                     aria-valuenow="${similarityPercentage}"
+                                     aria-valuemin="0"
+                                     aria-valuemax="100">
+                                    ${similarityPercentage}%
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+                speakerCount++;
+            }
+        }
+        html += '</div>';
+    } else {
+        // Simplified version for minimized state
+        const speakerCount = Object.keys(data.topics.per_speaker).length;
+        html += `<div class="topic-summary">Analyzing ${speakerCount} speaker topics</div>`;
+    }
+
+    html += '</div>';
+    return html;
+}
+    createTopicConsensusViz(data, size) {
+    if (!data?.team_metrics?.topic_consensus || !data?.topics?.overall) {
+        return this.createLoadingState('Topic Analysis & Consensus');
+    }
+
+    const mainTopic = data.topics.overall[0]?.name || 'Analyzing...';
+    const consensusScore = data.team_metrics.topic_consensus.current_score;
+    const avgConsensus = data.team_metrics.topic_consensus.average_score;
+    const toggleId = 'topicDetailToggle';
+    const savedToggleState = this.getToggleState('topic-consensus', toggleId);
+
+    // Helper function to determine text size class based on content length
+    const getTextSizeClass = (text) => {
+        if (text.length > 40) return 'text-xs';
+        if (text.length > 30) return 'text-sm';
+        if (text.length > 20) return 'text-base';
+        return 'text-lg';
+    };
+
+    const textSizeClass = getTextSizeClass(mainTopic);
+
+    // For minimized view
+    if (size !== 'large') {
+        return `
+            <div class="topic-consensus-viz size-${size}">
+                <h4 class="viz-title">Main Topic & Consensus Score</h4>
+                <div class="mini-topic-display">
+                    <div class="main-topic-pill ${textSizeClass}">${mainTopic}</div>
+                    <div class="progress-circular"
+                         style="background: conic-gradient(#9C27B0 ${consensusScore * 100}%, #eee ${consensusScore * 100}% 100%)">
+                        <div class="progress-circular-value">
+                            ${(consensusScore * 100).toFixed(0)}%
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    // For maximized view
+    let html = `
+        <div class="topic-consensus-viz size-${size}">
+            <h4 class="viz-title">Topic Analysis & Consensus</h4>
+
+            <div class="main-topic-section text-center mb-4">
+                <div class="topic-label mb-2">Overall Meeting Main Topic</div>
+                <div class="main-topic-pill enhanced ${textSizeClass}">
+                    <span class="topic-text">${mainTopic}</span>
+                </div>
+            </div>
+
+            <div class="consensus-section text-center mb-4">
+                <div class="consensus-label mb-2">Current Topic Consensus Score</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#673AB7 ${consensusScore * 100}%, #eee ${consensusScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(consensusScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Consensus: ${(avgConsensus * 100).toFixed(1)}%</div>
+            </div>
+
+            <div class="viz-controls mb-3">
+                <label class="switch">
+                    <input type="checkbox" id="${toggleId}" ${savedToggleState ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                </label>
+                <span class="ms-2">Show Individual Analysis (Beta)</span>
+            </div>
+
+            <div id="topicDetail" class="topic-detail" style="display: ${savedToggleState ? 'block' : 'none'}">`;
+
+    // Add speaker-specific analysis
+    if (data.topics.per_speaker) {
+        for (const [speaker, speakerData] of Object.entries(data.topics.per_speaker)) {
+            if (speakerData.topics?.length > 0) {
+                const similarity = speakerData.topic_similarities[0]?.similarity_score || 0;
+                const similarityPercentage = (similarity * 100).toFixed(1);
+                const color = getSimilarityColor(similarity);
+
+                html += `
+                    <div class="speaker-topic-container">
+                        <h6>${speaker}'s Topic Focus</h6>
+                        <div class="topic-bubble" style="border-color: ${color}">
+                            ${speakerData.topics[0].name}
+                        </div>
+                        <div class="similarity-meter">
+                            <div class="similarity-label">Alignment with Main Topic</div>
+                            <div class="progress">
+                                <div class="progress-bar"
+                                     style="width: ${similarityPercentage}%; background-color: ${color}"
+                                     aria-valuenow="${similarityPercentage}"
+                                     aria-valuemin="0"
+                                     aria-valuemax="100">
+                                    ${similarityPercentage}%
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+        }
+    }
+
+    html += `
+            </div>
+        </div>`;
+
+    // Add toggle functionality
+    setTimeout(() => {
+        const toggle = document.getElementById(toggleId);
+        const detail = document.getElementById('topicDetail');
+        if (toggle && detail) {
+            toggle.addEventListener('change', (e) => {
+                detail.style.display = e.target.checked ? 'block' : 'none';
+                this.saveToggleState('topic-consensus', toggleId, e.target.checked);
+            });
+        }
+    }, 100);
+
+    return html;
+}
+
+
+    createInteractionBalanceViz(data, size) {
+    if (!data?.team_metrics?.interaction_balance) {
+        return this.createLoadingState('Participation Balance');
+    }
+
+    const currentScore = data.team_metrics.interaction_balance.current_score;
+    const avgScore = data.team_metrics.interaction_balance.average_score;
+    const timeline = data.team_metrics.interaction_balance.timeline;
+
+    // For minimized view, show circular progress
+    if (size !== 'large') {
+        const percentage = currentScore * 100;
+        return `
+            <div class="interaction-balance-viz size-${size}">
+                <h4 class="viz-title">Participation Balance Score</h4>
+                <div class="progress-circular" style="background: conic-gradient(#4CAF50 ${percentage}%, #eee ${percentage}% 100%)">
+                    <div class="progress-circular-value">
+                        ${Math.round(percentage)}%
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    // For large view
+    const containerId = `interaction-balance-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = '350px';
+
+    const container = `
+        <div class="interaction-balance-viz size-${size}">
+            <h4 class="viz-title">Participation Balance</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Participation Score</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#4CAF50 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Participation: ${(avgScore * 100).toFixed(1)}%</div>
+            </div>
+
+            <div class="chart-container" style="height: ${containerHeight};">
+                <canvas id="${containerId}"></canvas>
+            </div>
+        </div>`;
+
+
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (window.balanceChart) {
+            window.balanceChart.destroy();
+        }
+
+        window.balanceChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: timeline.map(point => point.time.toFixed(1)),
+                datasets: [{
+                    label: 'Balance Score',
+                    data: timeline.map(point => point.score),
+                    borderColor: '#4CAF50',
+                    backgroundColor: 'rgba(76, 175, 80, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 1,
+                        ticks: {
+                            callback: value => `${(value * 100).toFixed(0)}%`
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large'
+                    }
+                }
+            }
+        });
+    }, 100);
+
+    return container;
+}
+
+    
+
+    createInfoSharingViz(data, size) {
+
+    if (!data?.team_metrics?.info_sharing_efficiency) {
+        return this.createLoadingState('Information Sharing');
+    }
+    const currentScore = data.team_metrics.info_sharing_efficiency.current_score;
+    const avgScore = data.team_metrics.info_sharing_efficiency.average_score;
+    const timeline = data.team_metrics.info_sharing_efficiency.timeline;
+    if (size !== 'large') {
+    const percentage = currentScore * 100;
+    return `
+        <div class="info-sharing-viz size-${size}">
+            <h4 class="viz-title">Information Sharing Efficiency Score</h4>
+            <div class="progress-circular" style="background: conic-gradient(#2196F3 ${percentage}%, #eee ${percentage}% 100%)">
+                <div class="progress-circular-value">
+                    ${Math.round(percentage)}%
+                </div>
+            </div>
+        </div>`;
+}
+
+    const containerId = `info-sharing-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = '350px';
+
+    const container = `
+        <div class="info-sharing-viz size-${size}">
+            <h4 class="viz-title">Information Sharing Efficiency</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Sharing Efficiency</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#2196F3 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Sharing Efficiency: ${(avgScore * 100).toFixed(1)}%</div>
+            </div>
+
+            <div class="chart-container" style="height: ${containerHeight};">
+                <canvas id="${containerId}"></canvas>
+            </div>
+        </div>`;
+
+
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (window.sharingChart) {
+            window.sharingChart.destroy();
+        }
+
+        window.sharingChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: timeline.map(point => point.time.toFixed(1)),
+                datasets: [{
+                    label: 'Sharing Efficiency',
+                    data: timeline.map(point => point.score),
+                    borderColor: '#2196F3',
+                    backgroundColor: 'rgba(33, 150, 243, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 1,
+                        ticks: {
+                            callback: value => `${(value * 100).toFixed(0)}%`
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large'
+                    }
+                }
+            }
+        });
+    }, 100);
+
+    return container;
+}
+
+    createDiscussionQualityViz(data, size) {
+    if (!data?.team_metrics?.discussion_ratios) {
+        return this.createLoadingState('Discussion Quality');
+    }
+
+    const currentScore = data.team_metrics.discussion_ratios.current_score;
+    const avgScore = data.team_metrics.discussion_ratios.average_score;
+    const timeline = data.team_metrics.discussion_ratios.timeline;
+
+    // Minimized view with circular progress
+    if (size !== 'large') {
+        return `
+            <div class="discussion-quality-viz size-${size}">
+                <h4 class="viz-title">Discussion Quality Score</h4>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#9C27B0 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(0)}%
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    const containerId = `discussion-quality-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = '350px';
+
+    const [qualityLabel, colorClass] = getQualityLabel(currentScore);
+
+    const container = `
+        <div class="discussion-quality-viz size-${size}">
+            <h4 class="viz-title">Discussion Quality Analysis</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Quality Score</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#9C27B0 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                    <div class="progress-circular-value">
+                        ${(currentScore * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Average Quality Score: ${(avgScore * 100).toFixed(1)}%</div>
+                <div class="quality-label mt-2 ${colorClass}">${qualityLabel}</div>
+            </div>
+
+            <div class="chart-container" style="height: ${containerHeight};">
+                <canvas id="${containerId}"></canvas>
+            </div>
+        </div>`;
+
+    // Chart initialization code remains the same
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (window.qualityChart) {
+            window.qualityChart.destroy();
+        }
+
+        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
+        gradient.addColorStop(0, 'rgba(156, 39, 176, 0.4)');
+        gradient.addColorStop(1, 'rgba(156, 39, 176, 0.1)');
+
+        window.qualityChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: timeline.map(point => point.time.toFixed(1)),
+                datasets: [{
+                    label: 'Discussion Quality',
+                    data: timeline.map(point => point.score),
+                    borderColor: '#9C27B0',
+                    backgroundColor: gradient,
+                    fill: true,
+                    tension: 0.4
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        beginAtZero: true,
+                        max: 1,
+                        ticks: {
+                            callback: value => `${(value * 100).toFixed(0)}%`
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large'
+                    }
+                }
+            }
+        });
+    }, 100);
+
+    return container;
+}
+
+
+    createLoadingState(vizName) {
+        return `
+            <div class="viz-loading">
+                <h4 class="viz-title">${vizName}</h4>
+                <div class="alert alert-info">
+                    Gathering data... Continue the conversation for analysis.
+                </div>
+            </div>`;
+    }
+
+    createTurnTakingViz(data, size) {
+    if (!data?.turn_taking?.window_entropies) {
+        return this.createLoadingState('Turn Taking Analysis');
+    }
+
+    const containerId = `turn-taking-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = size === 'large' ? '350px' : '150px';
+
+    // Create container with canvas
+    const container = `
+    <div class="turn-taking-viz size-${size}" style = "background: transparent; box-shadow: none; border: none">
+        <h4 class="viz-title">Turn Taking Analysis</h4>
+        ${size === 'large' ? `
+            <div class="turn-taking-stats">
+                <div class="stat-item">
+                    <span class="stat-label">Entropy Mean:</span>
+                    <span class="stat-value">${data.turn_taking.entropy_statistics.mean_entropy.toFixed(3)}</span>
+                </div>
+                <div class="stat-item">
+                    <span class="stat-label">Critical Points:</span>
+                    <span class="stat-value">${data.turn_taking.entropy_statistics.peak_count}</span>
+                </div>
+            </div>
+        ` : ''}
+        <canvas id="${containerId}" style="height: ${containerHeight}; width: 100%;"></canvas>
+    </div>`;
+
+    // Schedule chart creation after container is added to DOM
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        if (window.turnTakingChart) {
+            window.turnTakingChart.destroy();
+        }
+
+        let entropies = data.turn_taking.window_entropies;
+        let peakTimes = data.turn_taking.entropy_statistics.peak_times;
+
+        if (size !== 'large') {
+            // Reduce data points for minimized view
+            const skipPoints = Math.ceil(entropies.length / 20); // Show ~20 points in minimized view
+            entropies = entropies.filter((_, i) => i % skipPoints === 0);
+        }
+
+        window.turnTakingChart = new Chart(ctx, {
+            type: 'line',
+            data: {
+                labels: entropies.map(e => e.start_time.toFixed(1)),
+                datasets: [{
+                    label: 'Turn Taking Entropy',
+                    data: entropies.map(e => e.entropy),
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.1)',
+                    fill: true,
+                    tension: 0.4
+                },
+                {
+                    label: 'Critical Points',
+                    data: entropies.map(e =>
+                        peakTimes.includes(e.start_time) ? e.entropy : null
+                    ),
+                    pointRadius: 8,
+                    pointStyle: 'star',
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgb(255, 99, 132)',
+                    showLine: false
+                }]
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        display: size === 'large',
+                        beginAtZero: true,
+                        title: {
+                            display: size === 'large',
+                            text: 'Entropy'
+                        },
+                        grid: {
+                            color: '#e0e0e0',
+                            drawBorder : false
+                        },
+                        ticks:{
+                            display: size === 'large'
+                        }
+                    },
+                    x: {
+                        display: size === 'large',
+                        grid: {
+                            display : false
+                        },
+                        ticks :{
+                            display: size === 'large'
+                        },
+                        title: {
+                            display: size === 'large',
+                            text: 'Time (seconds)'
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large',
+                        labels:{
+                            boxWidth:20,
+                            padding:20
+                        }
+                    },
+                    tooltip: {
+                        enabled: size === 'large',
+                        callbacks: {
+                            label: function(context) {
+                                if (context.dataset.label === 'Critical Points' && context.raw !== null) {
+                                    return 'Critical Point - High Communication Variability';
+                                }
+                                return `Entropy: ${context.raw?.toFixed(3) || context.raw}`;
+                            }
+                        }
+                    },
+                    elements:{
+                        line:{
+                            tension:0.4
+                        },
+                        point:{
+                            radius: size === 'large'? 3:1
+                        }
+                    }
+                }
+            }
+        });
+    }, 100);
+
+    return container;
+}
+
+    createObjectivityViz(data, size) {
+    if (!data?.speaker_statistics) {
+        return this.createLoadingState('Meeting Objectivity');
+    }
+
+    const getObjectivityIcon = (subjectivity) => {
+        // 0 = objective, 1 = subjective
+        if (subjectivity <= 0.2) return '📊'; // Very objective (data/facts)
+        if (subjectivity <= 0.4) return '📋'; // Mostly objective
+        if (subjectivity <= 0.6) return '💭'; // Mixed
+        if (subjectivity <= 0.8) return '💫'; // Mostly subjective
+        return '🎭'; // Very subjective (opinions/emotions)
+    };
+
+    const getObjectivityLabel = (subjectivity) => {
+        if (subjectivity <= 0.2) return 'Highly Factual';
+        if (subjectivity <= 0.4) return 'Mostly Factual';
+        if (subjectivity <= 0.6) return 'Balanced';
+        if (subjectivity <= 0.8) return 'Mostly Opinion';
+        return 'Highly Opinion-based';
+    };
+
+    const getProgressBarColor = (subjectivity) => {
+        // Blue (objective) to purple (subjective) gradient
+        const hue = 240 - (subjectivity * 60); // 240 (blue) to 180 (purple)
+        return `hsl(${hue}, 70%, 50%)`;
+    };
+
+    // Calculate overall meeting subjectivity
+    const overallSubjectivity = Object.values(data.speaker_statistics)
+        .reduce((acc, speaker) => {
+            return acc + (speaker.sentiment.average_subjectivity || 0);
+        }, 0) / Object.keys(data.speaker_statistics).length;
+
+    const emojiSize = size === 'large' ? '3em' : '1.5em';
+    const barWidth = size === 'large' ? '300px' : '150px';
+
+    let html = `
+        <div class="objectivity-viz size-${size}" style="background: transparent; box-shadow: none; border: none;">
+            <h4 class="viz-title">Meeting Objectivity Analysis</h4>
+            <div class="overall-objectivity mb-4">
+                <div class="d-flex align-items-center justify-content-center mb-2">
+                    <span style="font-size: ${emojiSize}" class="me-3">
+                        ${getObjectivityIcon(overallSubjectivity)}
+                    </span>
+                    <span class="h5 mb-0">Overall: ${getObjectivityLabel(overallSubjectivity)}</span>
+                </div>
+                <div class="progress" style="width: ${barWidth}; margin: 10px auto;">
+                    <div class="progress-bar"
+                         role="progressbar"
+                         style="width: ${overallSubjectivity * 100}%; background-color: ${getProgressBarColor(overallSubjectivity)}"
+                         aria-valuenow="${overallSubjectivity * 100}"
+                         aria-valuemin="0"
+                         aria-valuemax="100">
+                        ${(overallSubjectivity * 100).toFixed(1)}%
+                    </div>
+                </div>
+                <div class="scale-labels d-flex justify-content-between" style="width: ${barWidth}; margin: 0 auto;">
+                    <span>Factual</span>
+                    <span>Opinion</span>
+                </div>
+            </div>`;
+
+    // Add speaker breakdowns if in large mode
+    if (size === 'large') {
+        html += '<div class="speaker-objectivity-grid mt-4">';
+
+        for (const [speaker, stats] of Object.entries(data.speaker_statistics)) {
+            const subjectivity = stats.sentiment.average_subjectivity;
+            html += `
+                <div class="speaker-card p-3 border rounded">
+                    <div class="d-flex align-items-center mb-2">
+                        <span style="font-size: 1.5em" class="me-2">
+                            ${getObjectivityIcon(subjectivity)}
+                        </span>
+                        <span class="speaker-name">${speaker}</span>
+                    </div>
+                    <div class="progress" style="height: 10px;">
+                        <div class="progress-bar"
+                             role="progressbar"
+                             style="width: ${subjectivity * 100}%; background-color: ${getProgressBarColor(subjectivity)}"
+                             aria-valuenow="${subjectivity * 100}"
+                             aria-valuemin="0"
+                             aria-valuemax="100">
+                        </div>
+                    </div>
+                    <div class="mt-2 text-center small">
+                        ${getObjectivityLabel(subjectivity)}
+                    </div>
+                </div>`;
+        }
+
+        html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+    createKnowledgeTrackingViz(data, size) {
+    if (!data?.knowledge_tracking?.speaker_tracking) {
+        return this.createLoadingState('Knowledge Alignment');
+    }
+
+    const containerId = `knowledge-tracking-${Math.random().toString(36).substr(2, 9)}`;
+    const containerHeight = size === 'large' ? '350px' : '150px';
+
+    const container = `
+        <div class="knowledge-tracking-viz size-${size}">
+            <h4 class="viz-title">Team Knowledge Coherence</h4>
+            <div class="chart-container" style="height: ${containerHeight};">
+                <canvas id="${containerId}"></canvas>
+            </div>
+        </div>`;
+
+    setTimeout(() => {
+        const canvas = document.getElementById(containerId);
+        if (!canvas) return;
+
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+
+        // Prepare datasets
+        const datasets = [];
+
+        // Add team coherence dataset first (will be rendered below other datasets)
+        if (data.knowledge_tracking.team_coherence?.timeline) {
+            datasets.push({
+                label: 'Team Semantic Evolution',
+                data: data.knowledge_tracking.team_coherence.timeline.map(point => ({
+                    x: point.time,
+                    y: point.coherence
+                })),
+                borderColor: '#FF4560',
+                backgroundColor: '#FF4560',
+                pointStyle: 'rectRot',
+                pointRadius: size === 'large' ? 4 : 2,
+                showLine: false
+            });
+        }
+
+        // Add individual speaker datasets
+        Object.entries(data.knowledge_tracking.speaker_tracking).forEach(([speaker, info], index) => {
+            const hue = (index * 137.508) % 360;
+            const color = `hsl(${hue}, 70%, 60%)`;
+
+            datasets.push({
+                label: speaker,
+                data: info.coherence_timeline.map(point => ({
+                    x: point.time,
+                    y: point.coherence
+                })),
+                borderColor: color,
+                backgroundColor: color,
+                pointStyle: ['circle', 'triangle', 'square', 'diamond', 'star'][index % 5],
+                pointRadius: size === 'large' ? 3 : 2,
+                showLine: false
+            });
+        });
+
+        if (window.knowledgeTrackingChart) {
+            window.knowledgeTrackingChart.destroy();
+        }
+
+        window.knowledgeTrackingChart = new Chart(ctx, {
+            type: 'scatter',
+            data: {
+                datasets: datasets
+            },
+            options: {
+                responsive: true,
+                maintainAspectRatio: false,
+                scales: {
+                    y: {
+                        min: -1,
+                        max: 1,
+                        title: {
+                            display: size === 'large',
+                            text: 'Semantic Coherence'
+                        },
+                        grid: {
+                            color: '#e0e0e0',
+                            drawBorder: false
+                        },
+                        ticks: {
+                            callback: function(value) {
+                                if (value === -1) return 'Low';
+                                if (value === 0) return 'Neutral';
+                                if (value === 1) return 'High';
+                                return '';
+                            }
+                        }
+                    },
+                    x: {
+                        title: {
+                            display: size === 'large',
+                            text: 'Time (seconds)'
+                        },
+                        grid: {
+                            display: false
+                        }
+                    }
+                },
+                plugins: {
+                    legend: {
+                        display: size === 'large',
+                        position: 'bottom',
+                        labels: {
+                            usePointStyle: true,
+                            pointStyle: true,
+                            padding: 20
+                        }
+                    },
+                    tooltip: {
+                        callbacks: {
+                            label: function(context) {
+                                const label = context.dataset.label;
+                                const coherence = (context.parsed.y * 100).toFixed(1);
+                                const time = context.parsed.x.toFixed(1);
+                                return `${label}: ${coherence}% coherence at ${time}s`;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+
+        // Add statistics if in large mode
+        if (size === 'large') {
+            const statsDiv = document.createElement('div');
+            statsDiv.className = 'knowledge-stats mt-3';
+
+            // Add team statistics first
+            if (data.knowledge_tracking.team_coherence?.statistics) {
+                const teamStats = data.knowledge_tracking.team_coherence.statistics;
+                statsDiv.innerHTML = `
+                    <div class="knowledge-stat-item team">
+                        <strong>Team Evolution</strong>
+                        <span class="coherence-value">Rate: ${(teamStats.convergence_rate * 100).toFixed(1)}%</span>
+                    </div>`;
+            }
+
+            // Add individual speaker statistics
+            Object.entries(data.knowledge_tracking.speaker_tracking).forEach(([speaker, info]) => {
+                const stats = info.statistics;
+                const avgCoherence = (stats.average_coherence * 100).toFixed(1);
+                const convergenceRate = stats.convergence_rate;
+                const trendIcon = convergenceRate > 0 ? '📈' : '📉';
+                const trendClass = convergenceRate > 0 ? 'positive' : 'negative';
+
+                statsDiv.innerHTML += `
+                    <div class="knowledge-stat-item">
+                        <strong>${speaker}</strong>
+                        <span class="coherence-value">Avg: ${avgCoherence}%</span>
+                        <span class="trend ${trendClass}" title="Convergence trend">${trendIcon}</span>
+                    </div>`;
+            });
+
+            canvas.parentNode.appendChild(statsDiv);
+        }
+
+    }, 100);
+
+    return container;
+}
+
+    createFillerAnalysisViz(data, size) {
+    if (!data?.filler_analysis?.overall) {
+        return this.createLoadingState('Filler Word Analysis');
+    }
+
+    const overallStats = data.filler_analysis.overall;
+    // Get most common fillers from the array structure
+    const mostCommon = overallStats.most_common || [];
+    const totalWords = overallStats.total_count || 0;
+
+    // For minimized view
+    if (size !== 'large') {
+        const fillerRate = overallStats.rate_per_minute || 0;
+        return `
+            <div class="filler-analysis-viz size-${size}">
+                <h4 class="viz-title">Filler Words Rate</h4>
+                <div class="progress-circular" style="background: conic-gradient(#E91E63 ${Math.min(fillerRate * 10, 100)}%, #eee ${Math.min(fillerRate * 10, 100)}% 100%)">
+                    <div class="progress-circular-value">
+                        ${fillerRate.toFixed(1)}/min
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    // Get category data
+    const categoryData = Object.entries(overallStats.by_category || {}).map(([category, data]) => ({
+        category: category.charAt(0).toUpperCase() + category.slice(1),
+        count: data.count,
+        percentage: data.percentage.toFixed(1)
+    }));
+
+    // Get top fillers (they're already sorted in the data)
+    const topFillers = mostCommon.slice(0, 5).map(filler => ({
+        word: filler.filler,
+        count: filler.count,
+        percentage: filler.percentage.toFixed(1)
+    }));
+
+    const toggleId = 'fillerDetailToggle';
+    const savedToggleState = this.getToggleState('filler-analysis', toggleId);
+
+    let html = `
+        <div class="filler-analysis-viz size-${size}">
+            <h4 class="viz-title">Filler Word Analysis</h4>
+
+            <div class="score-display text-center mb-4">
+                <div class="current-score-label mb-2">Current Filler Word Rate</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#E91E63 ${Math.min(overallStats.rate_per_minute * 10, 100)}%, #eee ${Math.min(overallStats.rate_per_minute * 10, 100)}% 100%)">
+                    <div class="progress-circular-value">
+                        ${overallStats.rate_per_minute.toFixed(1)}/min
+                    </div>
+                </div>
+                <div class="avg-score-label mt-2">Total Filler Words: ${totalWords}</div>
+            </div>
+
+            <div class="filler-overview">
+                <div class="row">
+                    <div class="col-md-6">
+                        <h5 class="text-center mb-3">By Category</h5>
+                        <div class="category-bars">
+                            ${categoryData.filter(cat => cat.count > 0).map(cat => `
+                                <div class="category-item mb-2">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="category-label">${cat.category}</span>
+                                        <span class="category-value">${cat.count} (${cat.percentage}%)</span>
+                                    </div>
+                                    <div class="progress">
+                                        <div class="progress-bar bg-pink"
+                                             role="progressbar"
+                                             style="width: ${cat.percentage}%"
+                                             aria-valuenow="${cat.percentage}"
+                                             aria-valuemin="0"
+                                             aria-valuemax="100">
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <h5 class="text-center mb-3">Most Common Fillers</h5>
+                        <div class="common-fillers">
+                            ${topFillers.map(filler => `
+                                <div class="filler-item mb-2">
+                                    <div class="d-flex justify-content-between mb-1">
+                                        <span class="filler-word">"${filler.word}"</span>
+                                        <span class="filler-count">${filler.count} (${filler.percentage}%)</span>
+                                    </div>
+                                    <div class="progress">
+                                        <div class="progress-bar bg-purple"
+                                             role="progressbar"
+                                             style="width: ${filler.percentage}%"
+                                             aria-valuenow="${filler.percentage}"
+                                             aria-valuemin="0"
+                                             aria-valuemax="100">
+                                        </div>
+                                    </div>
+                                </div>
+                            `).join('')}
+                        </div>
+                    </div>
+                </div>
+            </div>`;
+
+    // Add speaker-specific analysis if available
+    if (data.filler_analysis.per_speaker) {
+        html += `
+            <div class="viz-controls mb-3 mt-4">
+                <label class="switch">
+                    <input type="checkbox" id="${toggleId}" ${savedToggleState ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                </label>
+                <span class="ms-2">Show Individual Analysis (Beta)</span>
+            </div>
+            <div id="fillerDetail" class="filler-detail" style="display: ${savedToggleState ? 'block' : 'none'}">
+                <div class="speaker-filler-analysis">`;
+
+        for (const [speaker, stats] of Object.entries(data.filler_analysis.per_speaker)) {
+            if (stats.total_count > 0) {  // Only show speakers who used filler words
+                const speakerTopFillers = stats.most_common.slice(0, 3);
+
+                html += `
+                    <div class="speaker-filler-card mb-3">
+                        <div class="card">
+                            <div class="card-header">
+                                <h6 class="mb-0">${speaker}</h6>
+                            </div>
+                            <div class="card-body">
+                                <div class="d-flex justify-content-between align-items-center mb-3">
+                                    <span>Rate:</span>
+                                    <span class="badge bg-pink">${stats.rate_per_minute.toFixed(1)} fillers/min</span>
+                                </div>
+                                <div class="speaker-common-fillers">
+                                    <small class="text-muted">Most used:</small>
+                                    ${speakerTopFillers.map(filler => `
+                                        <span class="badge bg-light text-dark me-1">
+                                            ${filler.filler} (${filler.count})
+                                        </span>
+                                    `).join('')}
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+        }
+
+        html += `
+                </div>
+            </div>`;
+    }
+
+    html += `</div>`;
+
+    // Add toggle functionality
+    setTimeout(() => {
+        const toggle = document.getElementById(toggleId);
+        const detail = document.getElementById('fillerDetail');
+        if (toggle && detail) {
+            toggle.addEventListener('change', (e) => {
+                detail.style.display = e.target.checked ? 'block' : 'none';
+                this.saveToggleState('filler-analysis', toggleId, e.target.checked);
+            });
+        }
+    }, 100);
+
+    return html;
+}
+}
+
+    // Helper Functions
+    function getSentimentEmoji(sentiment) {
+        if (sentiment <= -0.6) return '😡';
+        if (sentiment <= -0.2) return '😟';
+        if (sentiment <= 0.2) return '😐';
+        if (sentiment <= 0.6) return '🙂';
+        return '😊';
+    }
+    // Helper function for color based on similarity
+function getSimilarityColor(similarity) {
+    const hue = Math.min(similarity * 120, 120); // 0 to 120 (red to green)
+    return `hsl(${hue}, 70%, 45%)`;
+}
+
+    function getSimilarityColor(similarity) {
+        const hue = similarity * 120;
+        return `hsl(${hue}, 70%, 50%)`;
+    }
+
+    function getQualityLabel(score) {
+    if (score > 0.8) return ['Excellent', 'text-success'];
+    if (score > 0.6) return ['Good', 'text-info'];
+    if (score > 0.4) return ['Balanced', 'text-warning'];
+    if (score > 0.2) return ['Needs Improvement', 'text-warning'];
+    return ['Concerning', 'text-danger'];
+}
+    function createSpeakerTopicSection(speakerData) {
+    if (!speakerData) return '';
+
+    let html = '';
+    for (const [speaker, data] of Object.entries(speakerData)) {
+        if (data.topics?.length > 0) {
+            const similarity = data.topic_similarities[0]?.similarity_score || 0;
+            const similarityPercentage = (similarity * 100).toFixed(1);
+            const color = getSimilarityColor(similarity);
+
+            html += `
+                <div class="speaker-topic-container">
+                    <h6>${speaker}'s Topic Focus</h6>
+                    <div class="topic-bubble" style="border-color: ${color}">
+                        ${data.topics[0].name}
+                    </div>
+                    <div class="similarity-meter">
+                        <div class="similarity-label">Alignment with Main Topic</div>
+                        <div class="progress">
+                            <div class="progress-bar"
+                                 style="width: ${similarityPercentage}%; background-color: ${color}"
+                                 aria-valuenow="${similarityPercentage}"
+                                 aria-valuemin="0"
+                                 aria-valuemax="100">
+                                ${similarityPercentage}%
+                            </div>
+                        </div>
+                    </div>
+                </div>`;
+        }
+    }
+    return html;
+}
+
+
+    // Initialize visualization manager
+    const vizManager = new VisualizationManager();
+
+    // Start loading screen logic
+    document.addEventListener('DOMContentLoaded', function() {
+        const loadingSection = document.getElementById('loadingSection');
+        const mainContent = document.getElementById('mainContent');
+        const videoPlayer = document.getElementById('videoPlayer');
+        const loadingProgress = document.getElementById('loadingProgress');
+        const loadingText = document.getElementById('loadingText');
+
+        let progress = 0;
+
+        const progressInterval = setInterval(() => {
+            if (progress < 90) {
+                progress += 10;
+                loadingProgress.style.width = progress + '%';
+            }
+        }, 500);
+
+        async function checkAnalysisReady() {
+            try {
+                const videoSrc = document.querySelector('#videoPlayer source').getAttribute('src');
+                const videoFilename = videoSrc.split('/').pop().split('.')[0];
+                const response = await fetch(`/static/DemoApp/meeting_analysis_${videoFilename}.json`);
+
+                if (response.ok) {
+                    loadingProgress.style.width = '100%';
+                    loadingText.textContent = 'Starting analysis...';
+
+                    setTimeout(() => {
+                        clearInterval(progressInterval);
+                        loadingSection.style.display = 'none';
+                        mainContent.style.display = 'block';
+                        videoPlayer.play().catch(e => console.log("Auto-play prevented:", e));
+                        fetchResults();
+                        setInterval(fetchResults, 5000);
+                    }, 1000);
+
+                    return true;
+                }
+            } catch (error) {
+                console.error('Error checking analysis status:', error);
+            }
+            return false;
+        }
+
+        const readyCheck = setInterval(async () => {
+            const isReady = await checkAnalysisReady();
+            if (isReady) {
+                clearInterval(readyCheck);
+            }
+        }, 1000);
+    });
+
+    async function fetchResults() {
+        console.log("Fetching results...");
+        const randomParam = Math.floor(Math.random() * 1000000);
+        const videoSrc = document.querySelector('#videoPlayer source').getAttribute('src');
+        const videoFilename = videoSrc.split('/').pop().split('.')[0];
+        const analysisUrl = `/static/DemoApp/meeting_analysis_${videoFilename}.json?random=${randomParam}`;
+
+        try {
+            const response = await fetch(analysisUrl);
+            if (!response.ok) {
+                throw new Error(`HTTP error! Status: ${response.status}`);
+            }
+            const data = await response.json();
+            console.log("Fetched data:", data);
+            if (data.meeting_duration > 0) {
+                document.getElementById('analysisProgress').style.display = 'none';
+                vizManager.updateData(data);
+            }
+        } catch (error) {
+            console.error('Error fetching analysis:', error);
+        }
+    }
+</script>
+
+<style>
+    /* Container styles */
+    .container-fluid {
+        padding: 20px;
+    }
+
+    /* Loading screen styles */
+    #loadingSection {
+        position: fixed;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        background-color: white;
+        display: flex;
+        flex-direction: column;
+        justify-content: center;
+        align-items: center;
+        z-index: 1000;
+    }
+
+    .loading-progress {
+        width: 300px;
+        margin: 20px;
+    }
+
+    .loading-text {
+        margin-top: 15px;
+        font-size: 1.1em;
+        color: #666;
+    }
+
+    /* Video player styles */
+    .video-player {
+        width: 100%;
+        max-height: 400px;
+        object-fit: contain;
+    }
+
+    /* Visualization container styles */
+    .active-viz-container {
+        height: 400px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 15px;
+        overflow-y: auto;
+    }
+
+    .viz-controls {
+        background: #fff;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+        margin-bottom: 20px;
+    }
+
+    .viz-label {
+        font-weight: 500;
+        margin-right: 10px;
+    }
+
+    .form-select {
+        width: auto;
+        display: inline-block;
+    }
+
+    .minimized-viz-container {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 15px;
+        margin-top: 20px;
+    }
+
+    .minimized-viz {
+    flex: 1 1 300px;
+    max-width: 400px;
+    height: 200px;
+    background: #fff;
+    border-radius: 8px;
+    padding: 15px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    cursor: pointer;
+    transition: transform 0.2s;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+
+    .minimized-viz:hover {
+        transform: translateY(-3px);
+    }
+
+    /* Sentiment visualization styles */
+    .sentiment-gauge {
+        width: 200px;
+        margin: 10px 0;
+    }
+    .sentiment-label {
+    margin-top: 15px;
+    padding: 10px;
+    border-radius: 8px;
+    background: #f8f9fa;
+    }
+    .overall-mood-label {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 5px;
+    }
+    .mood-value {
+    font-size: 1.2em;
+    font-weight: 500;
+    }
+    .main-topic-pill {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 200px;
+    max-width: 90%;
+    min-height: 48px;
+    padding: 12px 24px;
+    border-radius: 24px;
+    background: linear-gradient(135deg, #9C27B0, #673AB7);
+    color: white;
+    box-shadow: 0 3px 6px rgba(0,0,0,0.16);
+    transition: transform 0.2s, box-shadow 0.2s;
+    margin: 0 auto;
+    word-break: break-word;
+    text-align: center;
+    line-height: 1.3;
+}
+
+.main-topic-pill.enhanced {
+    min-width: 300px;
+    min-height: 60px;
+}
+
+.main-topic-pill:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 4px 8px rgba(0,0,0,0.2);
+}
+
+.main-topic-pill.text-xs {
+    font-size: 0.875rem;
+}
+
+.main-topic-pill.text-sm {
+    font-size: 1rem;
+}
+
+.main-topic-pill.text-base {
+    font-size: 1.125rem;
+}
+
+.main-topic-pill.text-lg {
+    font-size: 1.25rem;
+}
+
+.topic-text {
+    max-width: 100%;
+    overflow-wrap: break-word;
+    hyphens: auto;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .main-topic-pill.enhanced {
+        min-width: 200px;
+        padding: 10px 20px;
+    }
+
+    .main-topic-pill.text-lg {
+        font-size: 1.125rem;
+    }
+
+    .main-topic-pill.text-base {
+        font-size: 1rem;
+    }
+
+    .main-topic-pill.text-sm {
+        font-size: 0.875rem;
+    }
+
+    .main-topic-pill.text-xs {
+        font-size: 0.75rem;
+    }
+    }
+    .topic-label {
+    font-size: 1.1em;
+    color: #666;
+    font-weight: 500;
+    }
+
+    .consensus-label {
+        font-size: 1.1em;
+        color: #666;
+        font-weight: 500;
+    }
+
+    .main-topic-section {
+        padding: 20px;
+        background: #f8f9fa;
+        border-radius: 8px;
+        margin-bottom: 30px;
+    }
+
+    .gauge-background {
+        height: 20px;
+        background: linear-gradient(to right,
+            #ff4444 0%,
+            #ffff44 50%,
+            #44ff44 100%);
+        border-radius: 10px;
+        position: relative;
+        overflow: hidden;
+    }
+
+    .gauge-marker {
+        position: absolute;
+        top: -5px;
+        width: 2px;
+        height: 30px;
+        background: black;
+        transform: translateX(-50%);
+    }
+
+    .gauge-labels {
+        display: flex;
+        justify-content: space-between;
+        font-size: 0.8em;
+        color: #666;
+        margin-top: 5px;
+    }
+
+    .sentiment-emoji {
+        font-size: 2em;
+        margin-right: 10px;
+    }
+
+    .sentiment-emoji.large {
+        font-size: 3em;
+    }
+
+    .sentiment-emoji.small {
+        font-size: 1em;
+        margin: 0 5px;
+    }
+
+    .sentiment-display {
+        display: flex;
+        align-items: center;
+        margin-top: 10px;
+    }
+
+    /* Topic visualization styles */
+    .topic-overview {
+        margin-bottom: 2rem;
+        text-align: center;
+    }
+
+    .topic-bubble {
+        display: inline-block;
+        padding: 0.8rem 1.5rem;
+        border-radius: 20px;
+        background-color: #f8f9fa;
+        border: 2px solid #007bff;
+        margin: 0.5rem;
+        font-weight: 500;
+    }
+
+    .topic-bubble.main {
+        background-color: #007bff;
+        color: white;
+        border: none;
+        font-size: 1.1em;
+    }
+
+    .topic-keywords {
+        font-size: 0.9em;
+        color: #666;
+        margin: 0.5rem 0;
+    }
+
+    .speaker-topics {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1.5rem;
+        justify-content: center;
+        margin-top: 2rem;
+    }
+
+    .speaker-topic-container {
+        flex: 1 1 300px;
+        max-width: 400px;
+        text-align: center;
+    }
+
+    /* Visualization size-specific styles */
+    .size-large {
+        height: 100%;
+        padding: 15px;
+    }
+
+    .size-small {
+        height: 100%;
+        padding: 10px;
+    }
+
+    .viz-title {
+        font-size: 1.1rem;
+        margin-bottom: 15px;
+        text-align: center;
+    }
+
+    .size-small .viz-title {
+        font-size: 0.9rem;
+        margin-bottom: 8px;
+    }
+
+    .size-small .topic-bubble {
+        padding: 5px 10px;
+        font-size: 0.8em;
+    }
+
+    .size-small .similarity-meter {
+        margin-top: 5px;
+    }
+
+    .size-small .progress {
+        height: 0.5rem;
+    }
+
+    .size-small .topic-summary {
+        font-size: 0.8em;
+        text-align: center;
+        color: #666;
+    }
+
+    .size-small .sentiment-gauge {
+        height: 10px;
+    }
+
+    .size-small .gauge-labels {
+        font-size: 0.7em;
+    }
+
+    /* Transcript styles */
+    .transcript-section {
+        margin-top: 20px;
+        background: #fff;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+
+    .transcript-segment {
+        margin: 10px 0;
+        padding: 10px;
+        border-left: 3px solid #007bff;
+        background: #f8f9fa;
+        border-radius: 4px;
+    }
+
+    .speaker-label {
+        font-weight: bold;
+        margin-right: 10px;
+        color: #007bff;
+    }
+
+    .timestamp {
+        color: #666;
+        font-size: 0.9em;
+        margin-right: 10px;
+    }
+
+    .segment-text {
+        margin: 5px 0 0 0;
+        line-height: 1.4;
+    }
+
+    /* Progress and alert styles */
+    .progress {
+        height: 1.5rem;
+        border-radius: 0.75rem;
+        background-color: #f0f0f0;
+    }
+    .progress-bar {
+        border-radius: 0.75rem;
+        line-height: 1.5rem;
+        font-weight: 500;
+        transition: width 0.5s ease;
+        position: relative;
+        display: flex;
+        justify-content: center;
+        align-items: center;
+        color: white;
+        text-shadow: 0 1px 2px rgba(0,0,0,0.2);
+}
+
+    .alert {
+        border-radius: 8px;
+        margin-bottom: 0;
+    }
+
+    /* Loading state styles */
+    .viz-loading {
+        text-align: center;
+        padding: 15px;
+    }
+
+    .size-small .viz-loading .alert {
+        padding: 5px;
+        font-size: 0.8em;
+    }
+
+    /* Similarity meter styles */
+    .similarity-meter {
+        margin-top: 1rem;
+        text-align: center;
+    }
+
+    .similarity-label {
+        font-size: 0.9em;
+        margin-bottom: 0.3rem;
+        color: #667;
+        text-align: center;
+    }
+
+    /* Responsive adjustments */
+    @media (max-width: 768px) {
+        .active-viz-container {
+            height: 300px;
+            margin-top: 20px;
+        }
+
+        .minimized-viz {
+            height: 150px;
+        }
+
+        .viz-controls {
+            text-align: center;
+        }
+
+        .form-select {
+            width: 100%;
+            margin-top: 10px;
+        }
+    }
+    .speaker-sentiments {
+    border-top: 1px solid #dee2e6;
+    padding-top: 1rem;
+    }
+
+    .speaker-sentiment-grid {
+        display: flex;
+        flex-direction: column;
+        gap: 1rem;
+        max-width: 600px;
+        margin: 0 auto;
+    }
+
+    .speaker-sentiment-card {
+        background: #f8f9fa;
+        border-radius: 8px;
+        padding: 0.8rem;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+
+    .speaker-sentiment-card .speaker-label {
+        font-weight: 500;
+        color: #007bff;
+        margin-bottom: 0.5rem;
+    }
+
+    .speaker-sentiment-card .sentiment-display {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+    }
+
+    .speaker-sentiment-card .sentiment-gauge {
+        flex-grow: 1;
+    }
+    .turn-taking-viz, .objectivity-viz {
+    padding: 20px;
+    }
+
+    .turn-taking-stats {
+        display: flex;
+        justify-content: space-around;
+        text-align: center;
+    }
+
+    .stat-item {
+        padding: 8px 15px;
+        background: #f8f9fa;
+        border-radius: 4px;
+        margin: 0 5px
+    }
+
+    .stat-label {
+        font-size: 0.9em;
+        color: #666;
+        margin-right: 8px;
+    }
+
+    .stat-value {
+        font-weight: bold;
+        color: #333;
+    }
+
+    .speaker-objectivity-grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+        gap: 20px;
+        margin-top: 20px;
+    }
+
+    .speaker-card {
+        background: #f8f9fa;
+        transition: transform 0.2s;
+    }
+
+    .speaker-card:hover {
+        transform: translateY(-2px);
+    }
+
+    .scale-labels {
+        font-size: 0.8em;
+        color: #666;
+        margin-top: 5px;
+    }
+
+    .speaker-name {
+        font-weight: 500;
+        color: #333;
+    }
+    .sentiment-indicators {
+        display: inline-flex;
+        gap: 5px;
+        margin: 0 8px;
+    }
+
+    .sentiment-emoji, .objectivity-emoji {
+        cursor: help;
+    }
+    .minimized-viz .turn-taking-viz, .minimized-viz .objectivity-viz {
+    padding: 10px;
+    height: 150px;  /* Fixed height for minimized view */
+    width: 100%;
+    overflow: hidden;
+    }
+
+        /* Update canvas container for minimized view */
+        .minimized-viz canvas {
+            height: 100px !important;  /* Force smaller height in minimized state */
+        }
+
+    /* Update progress bars and containers */
+    .progress {
+        background-color: #f5f5f5;
+        border-radius: 4px;
+        overflow: hidden;
+        height: 8px;
+    }
+
+    /* Style for stats display */
+    .turn-taking-stats, .objectivity-stats {
+        background: transparent;
+        padding: 10px;
+        margin-bottom: 10px;
+        border-radius: 4px;
+        display: flex;
+        justify-content: space-around;
+    }
+
+    .stat-item {
+        padding: 8px 15px;
+        border-radius: 4px;
+        background: #f8f9fa;
+        margin: 0 5px;
+    }
+    .knowledge-tracking-viz {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.knowledge-tracking-viz .viz-title {
+    font-size: 1.1rem;
+    margin-bottom: 15px;
+    text-align: center;
+}
+
+.knowledge-stats {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    justify-content: center;
+    padding: 15px;
+    background: #f8f9fa;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.knowledge-stat-item {
+    background: white;
+    padding: 8px 15px;
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    min-width: 200px;
+}
+
+.knowledge-stat-item.team {
+    background: #fff8f8;
+    border-left: 3px solid #FF4560;
+}
+
+.knowledge-stat-item strong {
+    color: #333;
+    font-size: 0.9em;
+    min-width: 80px;
+}
+
+.coherence-value {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.trend {
+    font-size: 1.2em;
+    margin-left: auto;
+}
+
+.trend.positive {
+    color: #28a745;
+}
+
+.trend.negative {
+    color: #dc3545;
+}
+
+/* Chart container styles */
+.chart-container {
+    background: white;
+    padding: 10px;
+    border-radius: 8px;
+}
+
+/* Minimized view styles */
+.size-small .knowledge-tracking-viz {
+    padding: 10px;
+}
+
+.size-small .viz-title {
+    font-size: 0.9rem;
+    margin-bottom: 8px;
+}
+
+.size-small .knowledge-stats {
+    padding: 8px;
+    gap: 8px;
+}
+
+.size-small .knowledge-stat-item {
+    padding: 5px 10px;
+    min-width: auto;
+}
+
+/* Loading state styles */
+.viz-loading {
+    text-align: center;
+    padding: 15px;
+}
+
+.size-small .viz-loading .alert {
+    padding: 5px;
+    font-size: 0.8em;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+    .active-viz-container {
+        height: 300px;
+        margin-top: 20px;
+    }
+
+    .knowledge-stat-item {
+        min-width: 150px;
+    }
+
+    .knowledge-stats {
+        padding: 10px;
+        gap: 8px;
+    }
+}
+    /* Add these new styles at the end of your existing CSS */
+
+/* Circular Progress Styles for New Minimized Visualizations */
+.minimized-viz {
+    position: relative;
+    display: flex !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    justify-content: center !important;
+}
+
+.circular-progress {
+    width: 100px;
+    height: 100px;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.circular-chart {
+    width: 100%;
+    height: 100%;
+    transform: rotate(-90deg);
+}
+
+.circular-chart path {
+    transition: stroke-dasharray 0.5s ease;
+}
+
+.circular-chart text {
+    transform: rotate(90deg);
+    text-anchor: middle;
+    dominant-baseline: middle;
+    font-size: 12px;
+    font-weight: 500;
+    fill: #333;
+}
+
+/* Specific styles for different visualization types */
+.interaction-balance-viz.size-small,
+.response-dynamics-viz.size-small,
+.info-sharing-viz.size-small,
+.discussion-quality-viz.size-small {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+/* Topic consensus minimal view */
+.topic-consensus-viz.size-small {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+.mini-topic-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+}
+
+.main-topic-pill {
+    background: #9C27B0;
+    color: white;
+    padding: 4px 12px;
+    border-radius: 16px;
+    font-size: 0.8rem;
+    max-width: 150px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    text-align: center;
+    box-shadow: 0 2px 4px rgba(156, 39, 176, 0.2);
+}
+
+/* Progress circular styles */
+.progress-circular {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.progress-circular::before {
+    content: "";
+    position: absolute;
+    width: 72px; /* 90% of 80px */
+    height: 72px; /* 90% of 80px */
+    background: white;
+    border-radius: 50%;
+}
+
+
+.progress-circular-value {
+    position: relative;
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #333;
+    z-index: 1;
+}
+
+
+/* Responsive adjustments for new visualizations */
+@media (max-width: 768px) {
+    .progress-circular {
+        width: 60px;
+        height: 60px;
+    }
+
+    .progress-circular::before {
+        width: 54px; /* 90% of 60px */
+        height: 54px; /* 90% of 60px */
+    }
+
+    .progress-circular-value {
+        font-size: 1em;
+    }
+    .team-sentiment-viz.size-small .sentiment-score {
+    font-size: 1.8em;
+    font-weight: bold;
+    color: #333;
+    text-align: center;
+    margin-top: 10px;
+}
+
+.team-sentiment-viz.size-small .viz-title {
+    margin-bottom: 15px;
+}
+}
+    .current-score-label {
+    font-size: 1.1em;
+    color: #333;
+    font-weight: 500;
+    margin-bottom: 10px;
+}
+
+.avg-score-label {
+    font-size: 0.9em;
+    color: #666;
+    margin-top: 10px;
+}
+
+.score-display {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.progress-circular {
+    margin: 10px 0;
+}
+
+.filler-analysis-viz {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.filler-overview {
+    background: #f8f9fa;
+    border-radius: 8px;
+    padding: 20px;
+}
+
+.category-item, .filler-item {
+    background: white;
+    padding: 10px;
+    border-radius: 6px;
+    margin-bottom: 10px;
+}
+
+.category-label, .filler-word {
+    font-weight: 500;
+    color: #333;
+}
+
+.category-value, .filler-count {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.bg-pink {
+    background-color: #E91E63 !important;
+}
+
+.bg-purple {
+    background-color: #9C27B0 !important;
+}
+
+.speaker-filler-card .card {
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.speaker-filler-card .card-header {
+    background-color: #f8f9fa;
+    border-bottom: none;
+}
+
+.speaker-common-fillers {
+    margin-top: 10px;
+}
+
+.speaker-common-fillers .badge {
+    margin: 2px;
+    padding: 5px 8px;
+}
+
+.badge.bg-pink {
+    background-color: #E91E63 !important;
+    color: white;
+}
+
+/* Minimized view styles */
+.filler-analysis-viz.size-small {
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
+.size-small .filler-rate {
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #333;
+}
+
+
+</style>
+{% endblock %}
+
+
+
+

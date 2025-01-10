@@ -1,0 +1,13 @@
+otree
+psycopg2>=2.8.4
+numpy~=2.0.2
+pandas~=2.2.3
+moviepy~=2.1.1
+pyannote.audio
+transformers
+pydub
+openai-whisper
+textblob~=0.18.0.post0
+datetime~=5.5
+torch~=2.5.1
+soundfile~=0.12.1
