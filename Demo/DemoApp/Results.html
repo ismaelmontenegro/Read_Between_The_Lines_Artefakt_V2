@@ -50,14 +50,13 @@
                             <option value="sentiment-timeline">Sentiment Timeline</option>
                             <option value="interaction-balance">Participation Balance</option>
                             <option value="response-dynamics">Response Dynamics</option>
-                            <option value="info-sharing">Information Sharing</option>
-                            <option value="discussion-quality">Discussion Quality</option>
                             <option value="topic-analysis">Topic Analysis & Consensus</option>
                             <option value="speaker-polygon">Speaker Polygon</option>
                             <option value="turn-taking">Turn Taking Analysis</option>
                             <option value="objectivity">Meeting Objectivity</option>
                             <option value="knowledge-tracking">Knowledge Tracking</option>
                             <option value="filler-analysis">Filler Word Analysis</option>
+                            <option value="topic-alignment">Off-Topic Behaviour Analysis</option>
 
                         </select>
                     </div>
@@ -196,26 +195,6 @@
         this.restoreScrollPosition(this.activeVizId);
     }
 
-    saveState(){
-        localStorage.setItem('vizManagerState',JSON.stringify({
-            toggleStates: this.uiState.toggleStates,
-            scrollPositions: this.uiState.scrollPositions,
-            lastActiveViz: this.activeVizId
-        }));
-    }
-
-    setupEventListeners() {
-        this.selector.addEventListener('change', (e) => {
-            this.setActiveVisualization(e.target.value);
-        });
-    }
-
-    updateData(data) {
-        this.visualizationData = data;
-        this.updateAllVisualizations();
-        this.updateTranscript(data);
-    }
-
     setActiveVisualization(vizId) {
         this.activeVizId = vizId;
         this.updateAllVisualizations();
@@ -227,7 +206,7 @@
 
         // Update minimized visualizations
         this.minimizedContainer.innerHTML = '';
-        ['overall-sentiment', 'sentiment-timeline', 'interaction-balance','response-dynamics','info-sharing','discussion-quality', 'topic-analysis', 'speaker-polygon', 'turn-taking', 'objectivity', 'knowledge-tracking', 'filler-analysis'].forEach(vizId => {
+        ['overall-sentiment', 'sentiment-timeline', 'interaction-balance','response-dynamics', 'topic-analysis', 'speaker-polygon', 'turn-taking', 'objectivity', 'knowledge-tracking', 'filler-analysis', 'topic-alignment'].forEach(vizId => {
             if (vizId !== this.activeVizId) {
                 const minimizedViz = document.createElement('div');
                 minimizedViz.className = 'minimized-viz';
@@ -289,10 +268,6 @@
                 return this.createInteractionBalanceViz(data, size);
             case 'response-dynamics':
                 return this.createResponseDynamicsViz(data, size);
-            case 'info-sharing':
-                return this.createInfoSharingViz(data,size);
-            case 'discussion-quality':
-                return this.createDiscussionQualityViz(data,size);
             case 'topic-analysis':
                 return this.createTopicConsensusViz(data, size);
             case 'speaker-polygon':
@@ -305,6 +280,8 @@
                 return this.createKnowledgeTrackingViz(data,size);
             case 'filler-analysis':
                 return this.createFillerAnalysisViz(data, size);
+            case 'topic-alignment':
+                return this.createTopicAlignmentViz(data, size)
             default:
                 return '<p>Visualization not found</p>';
         }
@@ -342,6 +319,8 @@
 
         // Get speaker data
         const speakers = Object.keys(data.speaker_statistics);
+        const relevantSpeakers = speakers.map(speaker =>
+            data.speaker_statistics[speaker])
         const percentages = speakers.map(speaker =>
             data.speaker_statistics[speaker].speaking_time_percentage);
         const colors = speakers.map((_, index) => {
@@ -753,144 +732,6 @@
         return container;
     }
 
-
-    createSpeakingTimeViz(data, size) {
-        if (!data?.speaker_statistics) {
-            return this.createLoadingState('Speaking Time');
-        }
-
-        const containerId = `speaking-time-${Math.random().toString(36).substr(2, 9)}`;
-        const containerHeight = size === 'large' ? '350px' : '150px';
-
-        // Create container with canvas element
-        const container = `
-            <div class="speaking-time-viz size-${size}">
-                <h4 class="viz-title">Speaking Time Distribution</h4>
-                <canvas id="${containerId}" style="height: ${containerHeight}; width: 100%;"></canvas>
-            </div>`;
-
-        // Schedule chart creation after container is added to DOM
-        setTimeout(() => {
-            const canvas = document.getElementById(containerId);
-            if (!canvas) {
-                console.error('Canvas element not found:', containerId);
-                return;
-            }
-
-            try {
-                const ctx = canvas.getContext('2d');
-                if (!ctx) {
-                    console.error('Could not get canvas context');
-                    return;
-                }
-
-                if (window.speakingTimeChart) {
-                    window.speakingTimeChart.destroy();
-                }
-
-                const speakers = Object.keys(data.speaker_statistics);
-                const percentages = speakers.map(speaker =>
-                    data.speaker_statistics[speaker].speaking_time_percentage);
-                const colors = speakers.map((_, index) => {
-                    const hue = (index * 137.508) % 360;
-                    return `hsl(${hue}, 70%, 60%)`;
-                });
-
-                window.speakingTimeChart = new Chart(ctx, {
-                    type: 'pie',
-                    data: {
-                        labels: speakers,
-                        datasets: [{
-                            data: percentages,
-                            backgroundColor: colors,
-                            borderWidth: 1
-                        }]
-                    },
-                    options: {
-                        responsive: true,
-                        maintainAspectRatio: false,
-                        plugins: {
-                            legend: {
-                                display: size === 'large',
-                                position: 'bottom'
-                            },
-                            title: {
-                                display: size === 'large',
-                                text: 'Speaking Time Distribution'
-                            }
-                        }
-                    }
-                });
-            } catch (error) {
-                console.error('Error creating speaking time chart:', error);
-            }
-        }, 100);  // Increased timeout to ensure DOM is ready
-
-        return container;
-    }
-
-    createTopicAnalysisViz(data, size) {
-    if (!data?.topics?.overall || !data?.topics?.per_speaker) {
-        return this.createLoadingState('Topic Analysis');
-    }
-
-    const topicBubbleSize = size === 'large' ? 'normal' : 'small';
-    const maxSpeakers = size === 'large' ? Infinity : 2;
-
-    let html = `
-        <div class="topic-analysis-viz size-${size}">
-            <h4 class="viz-title">Topic Analysis</h4>
-            <div class="topic-overview">
-                <div class="overall-topic size-${topicBubbleSize}">
-                    <h5>Meeting Main Topic</h5>
-                    <div class="topic-bubble main">
-                        ${data.topics.overall[0]?.name || 'Analyzing...'}
-                    </div>
-                </div>
-            </div>`;
-
-    if (size === 'large') {
-        let speakerCount = 0;
-        html += '<div class="speaker-topics">';
-        for (const [speaker, speakerData] of Object.entries(data.topics.per_speaker)) {
-            if (speakerCount >= maxSpeakers) break;
-            if (speakerData.topics?.length > 0) {
-                const similarity = speakerData.topic_similarities[0]?.similarity_score || 0;
-                const similarityPercentage = (similarity * 100).toFixed(1);
-                const color = getSimilarityColor(similarity);
-
-                html += `
-                    <div class="speaker-topic-container">
-                        <h6>${speaker}'s Topic Focus</h6>
-                        <div class="topic-bubble" style="border-color: ${color}">
-                            ${speakerData.topics[0].name}
-                        </div>
-                        <div class="similarity-meter">
-                            <div class="similarity-label">Alignment with the meeting main topic</div>
-                            <div class="progress">
-                                <div class="progress-bar text-center"
-                                     style="width: ${similarityPercentage}%; background-color: ${color}"
-                                     aria-valuenow="${similarityPercentage}"
-                                     aria-valuemin="0"
-                                     aria-valuemax="100">
-                                    ${similarityPercentage}%
-                                </div>
-                            </div>
-                        </div>
-                    </div>`;
-                speakerCount++;
-            }
-        }
-        html += '</div>';
-    } else {
-        // Simplified version for minimized state
-        const speakerCount = Object.keys(data.topics.per_speaker).length;
-        html += `<div class="topic-summary">Analyzing ${speakerCount} speaker topics</div>`;
-    }
-
-    html += '</div>';
-    return html;
-}
     createTopicConsensusViz(data, size) {
     if (!data?.team_metrics?.topic_consensus || !data?.topics?.overall) {
         return this.createLoadingState('Topic Analysis & Consensus');
@@ -899,8 +740,6 @@
     const mainTopic = data.topics.overall[0]?.name || 'Analyzing...';
     const consensusScore = data.team_metrics.topic_consensus.current_score;
     const avgConsensus = data.team_metrics.topic_consensus.average_score;
-    const toggleId = 'topicDetailToggle';
-    const savedToggleState = this.getToggleState('topic-consensus', toggleId);
 
     // Helper function to determine text size class based on content length
     const getTextSizeClass = (text) => {
@@ -930,7 +769,7 @@
     }
 
     // For maximized view
-    let html = `
+    return `
         <div class="topic-consensus-viz size-${size}">
             <h4 class="viz-title">Topic Analysis & Consensus</h4>
 
@@ -950,68 +789,8 @@
                 </div>
                 <div class="avg-score-label mt-2">Average Consensus: ${(avgConsensus * 100).toFixed(1)}%</div>
             </div>
-
-            <div class="viz-controls mb-3">
-                <label class="switch">
-                    <input type="checkbox" id="${toggleId}" ${savedToggleState ? 'checked' : ''}>
-                    <span class="slider round"></span>
-                </label>
-                <span class="ms-2">Show Individual Analysis (Beta)</span>
-            </div>
-
-            <div id="topicDetail" class="topic-detail" style="display: ${savedToggleState ? 'block' : 'none'}">`;
-
-    // Add speaker-specific analysis
-    if (data.topics.per_speaker) {
-        for (const [speaker, speakerData] of Object.entries(data.topics.per_speaker)) {
-            if (speakerData.topics?.length > 0) {
-                const similarity = speakerData.topic_similarities[0]?.similarity_score || 0;
-                const similarityPercentage = (similarity * 100).toFixed(1);
-                const color = getSimilarityColor(similarity);
-
-                html += `
-                    <div class="speaker-topic-container">
-                        <h6>${speaker}'s Topic Focus</h6>
-                        <div class="topic-bubble" style="border-color: ${color}">
-                            ${speakerData.topics[0].name}
-                        </div>
-                        <div class="similarity-meter">
-                            <div class="similarity-label">Alignment with Main Topic</div>
-                            <div class="progress">
-                                <div class="progress-bar"
-                                     style="width: ${similarityPercentage}%; background-color: ${color}"
-                                     aria-valuenow="${similarityPercentage}"
-                                     aria-valuemin="0"
-                                     aria-valuemax="100">
-                                    ${similarityPercentage}%
-                                </div>
-                            </div>
-                        </div>
-                    </div>`;
-            }
-        }
-    }
-
-    html += `
-            </div>
         </div>`;
-
-    // Add toggle functionality
-    setTimeout(() => {
-        const toggle = document.getElementById(toggleId);
-        const detail = document.getElementById('topicDetail');
-        if (toggle && detail) {
-            toggle.addEventListener('change', (e) => {
-                detail.style.display = e.target.checked ? 'block' : 'none';
-                this.saveToggleState('topic-consensus', toggleId, e.target.checked);
-            });
-        }
-    }, 100);
-
-    return html;
 }
-
-
     createInteractionBalanceViz(data, size) {
     if (!data?.team_metrics?.interaction_balance) {
         return this.createLoadingState('Participation Balance');
@@ -1044,13 +823,13 @@
             <h4 class="viz-title">Participation Balance</h4>
 
             <div class="score-display text-center mb-4">
-                <div class="current-score-label mb-2">Current Participation Score</div>
+                <div class="current-score-label mb-2">Current Participation Balance Score</div>
                 <div class="progress-circular mx-auto" style="background: conic-gradient(#4CAF50 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
                     <div class="progress-circular-value">
                         ${(currentScore * 100).toFixed(1)}%
                     </div>
                 </div>
-                <div class="avg-score-label mt-2">Average Participation: ${(avgScore * 100).toFixed(1)}%</div>
+                <div class="avg-score-label mt-2">Average Participation Balance Score: ${(avgScore * 100).toFixed(1)}%</div>
             </div>
 
             <div class="chart-container" style="height: ${containerHeight};">
@@ -1107,200 +886,178 @@
     return container;
 }
 
-    
-
-    createInfoSharingViz(data, size) {
-
-    if (!data?.team_metrics?.info_sharing_efficiency) {
-        return this.createLoadingState('Information Sharing');
-    }
-    const currentScore = data.team_metrics.info_sharing_efficiency.current_score;
-    const avgScore = data.team_metrics.info_sharing_efficiency.average_score;
-    const timeline = data.team_metrics.info_sharing_efficiency.timeline;
-    if (size !== 'large') {
-    const percentage = currentScore * 100;
-    return `
-        <div class="info-sharing-viz size-${size}">
-            <h4 class="viz-title">Information Sharing Efficiency Score</h4>
-            <div class="progress-circular" style="background: conic-gradient(#2196F3 ${percentage}%, #eee ${percentage}% 100%)">
-                <div class="progress-circular-value">
-                    ${Math.round(percentage)}%
-                </div>
-            </div>
-        </div>`;
-}
-
-    const containerId = `info-sharing-${Math.random().toString(36).substr(2, 9)}`;
-    const containerHeight = '350px';
-
-    const container = `
-        <div class="info-sharing-viz size-${size}">
-            <h4 class="viz-title">Information Sharing Efficiency</h4>
-
-            <div class="score-display text-center mb-4">
-                <div class="current-score-label mb-2">Current Sharing Efficiency</div>
-                <div class="progress-circular mx-auto" style="background: conic-gradient(#2196F3 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
-                    <div class="progress-circular-value">
-                        ${(currentScore * 100).toFixed(1)}%
-                    </div>
-                </div>
-                <div class="avg-score-label mt-2">Average Sharing Efficiency: ${(avgScore * 100).toFixed(1)}%</div>
-            </div>
-
-            <div class="chart-container" style="height: ${containerHeight};">
-                <canvas id="${containerId}"></canvas>
-            </div>
-        </div>`;
-
-
-    setTimeout(() => {
-        const canvas = document.getElementById(containerId);
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        if (window.sharingChart) {
-            window.sharingChart.destroy();
-        }
-
-        window.sharingChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: timeline.map(point => point.time.toFixed(1)),
-                datasets: [{
-                    label: 'Sharing Efficiency',
-                    data: timeline.map(point => point.score),
-                    borderColor: '#2196F3',
-                    backgroundColor: 'rgba(33, 150, 243, 0.1)',
-                    fill: true,
-                    tension: 0.4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 1,
-                        ticks: {
-                            callback: value => `${(value * 100).toFixed(0)}%`
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: size === 'large'
-                    }
-                }
-            }
-        });
-    }, 100);
-
-    return container;
-}
-
-    createDiscussionQualityViz(data, size) {
-    if (!data?.team_metrics?.discussion_ratios) {
-        return this.createLoadingState('Discussion Quality');
+    createTopicAlignmentViz(data, size) {
+    if (!data?.recent_topic_alignment) {
+        return this.createLoadingState('Topic Alignment Analysis');
     }
 
-    const currentScore = data.team_metrics.discussion_ratios.current_score;
-    const avgScore = data.team_metrics.discussion_ratios.average_score;
-    const timeline = data.team_metrics.discussion_ratios.timeline;
+    const teamStats = data.recent_topic_alignment.summary.team_stats;
+    const currentScores = data.recent_topic_alignment.current_scores;
+    const averageAlignment = teamStats.average_team_alignment || 0;
+    const alignmentStd = teamStats.alignment_std || 0;
+    const warningCounts = teamStats.warning_counts || {};
+    const mostOffTopicSpeaker = teamStats.most_off_topic_speaker;
+    const toggleId = 'topicAlignmentDetailToggle';
+    const savedToggleState = this.getToggleState('topic-alignment', toggleId);
 
-    // Minimized view with circular progress
+    // For minimized view
     if (size !== 'large') {
         return `
-            <div class="discussion-quality-viz size-${size}">
-                <h4 class="viz-title">Discussion Quality Score</h4>
-                <div class="progress-circular mx-auto" style="background: conic-gradient(#9C27B0 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+            <div class="topic-alignment-viz size-${size}">
+                <h4 class="viz-title">Topic Alignment Score</h4>
+                <div class="progress-circular" style="background: conic-gradient(#2196F3 ${averageAlignment * 100}%, #eee ${averageAlignment * 100}% 100%)">
                     <div class="progress-circular-value">
-                        ${(currentScore * 100).toFixed(0)}%
+                        ${(averageAlignment * 100).toFixed(0)}%
+                        ${warningCounts.total > 0 ?
+                            `<span class="warning-indicator" title="${warningCounts.total} alignment warnings">⚠️</span>`
+                            : ''}
                     </div>
                 </div>
             </div>`;
     }
 
-    const containerId = `discussion-quality-${Math.random().toString(36).substr(2, 9)}`;
-    const containerHeight = '350px';
-
-    const [qualityLabel, colorClass] = getQualityLabel(currentScore);
-
-    const container = `
-        <div class="discussion-quality-viz size-${size}">
-            <h4 class="viz-title">Discussion Quality Analysis</h4>
+    // Full view with detailed analysis
+    let html = `
+        <div class="topic-alignment-viz size-${size}">
+            <h4 class="viz-title">Off-Topic Behaviour Analysis</h4>
 
             <div class="score-display text-center mb-4">
-                <div class="current-score-label mb-2">Current Quality Score</div>
-                <div class="progress-circular mx-auto" style="background: conic-gradient(#9C27B0 ${currentScore * 100}%, #eee ${currentScore * 100}% 100%)">
+                <div class="current-score-label mb-2">Average Speaker Alignment to Meeting's main topic</div>
+                <div class="progress-circular mx-auto" style="background: conic-gradient(#2196F3 ${averageAlignment * 100}%, #eee ${averageAlignment * 100}% 100%)">
                     <div class="progress-circular-value">
-                        ${(currentScore * 100).toFixed(1)}%
+                        ${(averageAlignment * 100).toFixed(1)}%
                     </div>
                 </div>
-                <div class="avg-score-label mt-2">Average Quality Score: ${(avgScore * 100).toFixed(1)}%</div>
-                <div class="quality-label mt-2 ${colorClass}">${qualityLabel}</div>
+
+                <div class="team-metrics mt-3">
+                    <div class="metric-item">
+                        <span class="metric-label">Alignment Consistency between Speakers:</span>
+                        <span class="metric-value ${alignmentStd <= 0.2 ? 'text-success' : alignmentStd <= 0.4 ? 'text-warning' : 'text-danger'}">
+                            ${(100 - alignmentStd * 100).toFixed(1)}%
+                        </span>
+                    </div>
+                    ${mostOffTopicSpeaker ? `
+                        <div class="metric-item alert alert-warning mt-2">
+                            <i class="fas fa-exclamation-triangle"></i>
+                            <strong>${mostOffTopicSpeaker}</strong> shows the most frequent off-topic behavior
+                        </div>
+                    ` : ''}
+                </div>
+
+                <div class="warning-summary mt-3">
+                    <h6 class="warning-title">Off-Topic Instances Total Count</h6>
+                    <div class="warning-counts">
+                        <span class="mild-warnings" title="Minor misalignments">
+                            🟡 Mild: ${warningCounts.mild || 0}
+                        </span>
+                        <span class="moderate-warnings" title="Moderate misalignments">
+                            🟠 Moderate: ${warningCounts.moderate || 0}
+                        </span>
+                        <span class="severe-warnings" title="Severe misalignments">
+                            🔴 Severe: ${warningCounts.severe || 0}
+                        </span>
+                    </div>
+                </div>
             </div>
 
-            <div class="chart-container" style="height: ${containerHeight};">
-                <canvas id="${containerId}"></canvas>
+            <div class="viz-controls mb-3">
+                <label class="switch">
+                    <input type="checkbox" id="${toggleId}" ${savedToggleState ? 'checked' : ''}>
+                    <span class="slider round"></span>
+                </label>
+                <span class="ms-2">Show Individual Analysis</span>
+            </div>
+
+            <div id="topicAlignmentDetail" class="topic-alignment-detail" style="display: ${savedToggleState ? 'block' : 'none'}">`;
+
+    // Add individual speaker analysis
+    if (data.recent_topic_alignment.summary.per_speaker) {
+        html += `<div class="speaker-alignment-grid">`;
+        for (const [speaker, stats] of Object.entries(data.recent_topic_alignment.summary.per_speaker)) {
+            const warningClass = stats.total_warnings > 0 ?
+                stats.warning_breakdown.severe > 0 ? 'severe' :
+                stats.warning_breakdown.moderate > 0 ? 'moderate' : 'mild'
+                : 'good';
+
+            // Get current speaker's suggestions if available
+            const speakerCurrentData = currentScores[speaker] || {};
+            const topicSuggestions = speakerCurrentData.topic_suggestions || [];
+
+            html += `
+                <div class="speaker-alignment-card ${warningClass}">
+                    <div class="card">
+                        <div class="card-header d-flex justify-content-between align-items-center">
+                            <h6 class="mb-0">${speaker}</h6>
+                            <span class="alignment-score">
+                                ${(stats.average_alignment * 100).toFixed(1)}% aligned
+                            </span>
+                        </div>
+                        <div class="card-body">
+                            <div class="warning-breakdown">
+                                <div class="warning-type">
+                                    <span class="warning-label">Minor:</span>
+                                    <span class="warning-count">${stats.warning_breakdown.mild}</span>
+                                </div>
+                                <div class="warning-type">
+                                    <span class="warning-label">Moderate:</span>
+                                    <span class="warning-count">${stats.warning_breakdown.moderate}</span>
+                                </div>
+                                <div class="warning-type">
+                                    <span class="warning-label">Severe:</span>
+                                    <span class="warning-count">${stats.warning_breakdown.severe}</span>
+                                </div>
+                            </div>
+                            ${stats.max_consecutive_warnings > 2 ? `
+                                <div class="consecutive-warnings mt-2">
+                                    <span class="badge bg-warning">
+                                        ${stats.max_consecutive_warnings} consecutive off-topic instances
+                                    </span>
+                                </div>
+                            ` : ''}
+
+                            ${topicSuggestions.length > 0 ? `
+                                <div class="topic-suggestions mt-3">
+                                    <h6 class="suggestions-title">Suggested Topics:</h6>
+                                    <div class="suggestions-list">
+                                        ${topicSuggestions.map((suggestion, index) => `
+                                            <div class="suggestion-item">
+                                                <span class="suggestion-number">${index + 1}.</span>
+                                                <div class="suggestion-content">
+                                                    <div class="suggestion-name">${suggestion.topic_name}</div>
+                                                    <div class="suggestion-terms">
+                                                        Key terms: ${suggestion.key_terms.join(', ')}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        `).join('')}
+                                    </div>
+                                </div>
+                            ` : ''}
+                        </div>
+                    </div>
+                </div>`;
+        }
+        html += `</div>`;
+    }
+
+    html += `
             </div>
         </div>`;
 
-    // Chart initialization code remains the same
+    // Add toggle functionality
     setTimeout(() => {
-        const canvas = document.getElementById(containerId);
-        if (!canvas) return;
-
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
-
-        if (window.qualityChart) {
-            window.qualityChart.destroy();
+        const toggle = document.getElementById(toggleId);
+        const detail = document.getElementById('topicAlignmentDetail');
+        if (toggle && detail) {
+            toggle.addEventListener('change', (e) => {
+                detail.style.display = e.target.checked ? 'block' : 'none';
+                this.saveToggleState('topic-alignment', toggleId, e.target.checked);
+            });
         }
-
-        const gradient = ctx.createLinearGradient(0, 0, 0, canvas.height);
-        gradient.addColorStop(0, 'rgba(156, 39, 176, 0.4)');
-        gradient.addColorStop(1, 'rgba(156, 39, 176, 0.1)');
-
-        window.qualityChart = new Chart(ctx, {
-            type: 'line',
-            data: {
-                labels: timeline.map(point => point.time.toFixed(1)),
-                datasets: [{
-                    label: 'Discussion Quality',
-                    data: timeline.map(point => point.score),
-                    borderColor: '#9C27B0',
-                    backgroundColor: gradient,
-                    fill: true,
-                    tension: 0.4
-                }]
-            },
-            options: {
-                responsive: true,
-                maintainAspectRatio: false,
-                scales: {
-                    y: {
-                        beginAtZero: true,
-                        max: 1,
-                        ticks: {
-                            callback: value => `${(value * 100).toFixed(0)}%`
-                        }
-                    }
-                },
-                plugins: {
-                    legend: {
-                        display: size === 'large'
-                    }
-                }
-            }
-        });
     }, 100);
 
-    return container;
+    return html;
 }
-
 
     createLoadingState(vizName) {
         return `
@@ -1896,57 +1653,11 @@
         return '😊';
     }
     // Helper function for color based on similarity
-function getSimilarityColor(similarity) {
-    const hue = Math.min(similarity * 120, 120); // 0 to 120 (red to green)
-    return `hsl(${hue}, 70%, 45%)`;
-}
 
     function getSimilarityColor(similarity) {
         const hue = similarity * 120;
         return `hsl(${hue}, 70%, 50%)`;
     }
-
-    function getQualityLabel(score) {
-    if (score > 0.8) return ['Excellent', 'text-success'];
-    if (score > 0.6) return ['Good', 'text-info'];
-    if (score > 0.4) return ['Balanced', 'text-warning'];
-    if (score > 0.2) return ['Needs Improvement', 'text-warning'];
-    return ['Concerning', 'text-danger'];
-}
-    function createSpeakerTopicSection(speakerData) {
-    if (!speakerData) return '';
-
-    let html = '';
-    for (const [speaker, data] of Object.entries(speakerData)) {
-        if (data.topics?.length > 0) {
-            const similarity = data.topic_similarities[0]?.similarity_score || 0;
-            const similarityPercentage = (similarity * 100).toFixed(1);
-            const color = getSimilarityColor(similarity);
-
-            html += `
-                <div class="speaker-topic-container">
-                    <h6>${speaker}'s Topic Focus</h6>
-                    <div class="topic-bubble" style="border-color: ${color}">
-                        ${data.topics[0].name}
-                    </div>
-                    <div class="similarity-meter">
-                        <div class="similarity-label">Alignment with Main Topic</div>
-                        <div class="progress">
-                            <div class="progress-bar"
-                                 style="width: ${similarityPercentage}%; background-color: ${color}"
-                                 aria-valuenow="${similarityPercentage}"
-                                 aria-valuemin="0"
-                                 aria-valuemax="100">
-                                ${similarityPercentage}%
-                            </div>
-                        </div>
-                    </div>
-                </div>`;
-        }
-    }
-    return html;
-}
-
 
     // Initialize visualization manager
     const vizManager = new VisualizationManager();
@@ -2074,6 +1785,11 @@ function getSimilarityColor(similarity) {
         padding: 15px;
         overflow-y: auto;
     }
+    canvas{
+        height: 100%;
+        max-height: 400px;
+        width: 100%;
+    }
 
     .viz-controls {
         background: #fff;
@@ -2096,6 +1812,8 @@ function getSimilarityColor(similarity) {
     .minimized-viz-container {
         display: flex;
         flex-wrap: wrap;
+        justify-content: center; /* Center elements */
+        align-items: center;    /* Center vertically */
         gap: 15px;
         margin-top: 20px;
     }
@@ -2282,60 +2000,6 @@ function getSimilarityColor(similarity) {
         margin-top: 10px;
     }
 
-    /* Topic visualization styles */
-    .topic-overview {
-        margin-bottom: 2rem;
-        text-align: center;
-    }
-
-    .topic-bubble {
-        display: inline-block;
-        padding: 0.8rem 1.5rem;
-        border-radius: 20px;
-        background-color: #f8f9fa;
-        border: 2px solid #007bff;
-        margin: 0.5rem;
-        font-weight: 500;
-    }
-
-    .topic-bubble.main {
-        background-color: #007bff;
-        color: white;
-        border: none;
-        font-size: 1.1em;
-    }
-
-    .topic-keywords {
-        font-size: 0.9em;
-        color: #666;
-        margin: 0.5rem 0;
-    }
-
-    .speaker-topics {
-        display: flex;
-        flex-wrap: wrap;
-        gap: 1.5rem;
-        justify-content: center;
-        margin-top: 2rem;
-    }
-
-    .speaker-topic-container {
-        flex: 1 1 300px;
-        max-width: 400px;
-        text-align: center;
-    }
-
-    /* Visualization size-specific styles */
-    .size-large {
-        height: 100%;
-        padding: 15px;
-    }
-
-    .size-small {
-        height: 100%;
-        padding: 10px;
-    }
-
     .viz-title {
         font-size: 1.1rem;
         margin-bottom: 15px;
@@ -2442,28 +2106,12 @@ function getSimilarityColor(similarity) {
         font-size: 0.8em;
     }
 
-    /* Similarity meter styles */
-    .similarity-meter {
-        margin-top: 1rem;
-        text-align: center;
-    }
-
-    .similarity-label {
-        font-size: 0.9em;
-        margin-bottom: 0.3rem;
-        color: #667;
-        text-align: center;
-    }
-
     /* Responsive adjustments */
     @media (max-width: 768px) {
         .active-viz-container {
             height: 300px;
             margin-top: 20px;
-        }
-
-        .minimized-viz {
-            height: 150px;
+            overflow-y: auto
         }
 
         .viz-controls {
@@ -2621,17 +2269,6 @@ function getSimilarityColor(similarity) {
     text-align: center;
 }
 
-.knowledge-stats {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px;
-    justify-content: center;
-    padding: 15px;
-    background: #f8f9fa;
-    border-radius: 8px;
-    margin-top: 20px;
-}
-
 .knowledge-stat-item {
     background: white;
     padding: 8px 15px;
@@ -2715,6 +2352,7 @@ function getSimilarityColor(similarity) {
     .active-viz-container {
         height: 300px;
         margin-top: 20px;
+        overflow-y: auto;
     }
 
     .knowledge-stat-item {
@@ -2725,31 +2363,6 @@ function getSimilarityColor(similarity) {
         padding: 10px;
         gap: 8px;
     }
-}
-    /* Add these new styles at the end of your existing CSS */
-
-/* Circular Progress Styles for New Minimized Visualizations */
-.minimized-viz {
-    position: relative;
-    display: flex !important;
-    flex-direction: column !important;
-    align-items: center !important;
-    justify-content: center !important;
-}
-
-.circular-progress {
-    width: 100px;
-    height: 100px;
-    position: relative;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-}
-
-.circular-chart {
-    width: 100%;
-    height: 100%;
-    transform: rotate(-90deg);
 }
 
 .circular-chart path {
@@ -2763,24 +2376,6 @@ function getSimilarityColor(similarity) {
     font-size: 12px;
     font-weight: 500;
     fill: #333;
-}
-
-/* Specific styles for different visualization types */
-.interaction-balance-viz.size-small,
-.response-dynamics-viz.size-small,
-.info-sharing-viz.size-small,
-.discussion-quality-viz.size-small {
-    height: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-}
-
-/* Topic consensus minimal view */
-.topic-consensus-viz.size-small {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
 }
 
 .mini-topic-display {
@@ -2960,6 +2555,270 @@ function getSimilarityColor(similarity) {
     font-weight: bold;
     color: #333;
 }
+.topic-alignment-viz {
+    background: white;
+    border-radius: 8px;
+    padding: 20px;
+}
+.topic-alignment-viz .progress-circular {
+    width: 80px;
+    height: 80px;
+    border-radius: 50%;
+    position: relative;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    margin: 0 auto;
+}
+.topic-alignment-viz .progress-circular::before {
+    content: "";
+    position: absolute;
+    width: 72px;
+    height: 72px;
+    background: white;
+    border-radius: 50%;
+    top: 50%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+}
+
+.topic-alignment-viz .progress-circular-value {
+    position: relative;
+    font-size: 1.2em;
+    font-weight: bold;
+    color: #333;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 100%;
+    height: 100%;
+}
+
+.topic-alignment-viz .warning-indicator {
+    font-size: 0.8em;
+    margin-left: 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+/* Responsive adjustments specifically for topic alignment */
+@media (max-width: 768px) {
+    .topic-alignment-viz .progress-circular {
+        width: 60px;
+        height: 60px;
+    }
+
+    .topic-alignment-viz .progress-circular::before {
+        width: 54px;
+        height: 54px;
+    }
+
+    .topic-alignment-viz .progress-circular-value {
+        font-size: 1em;
+    }
+}
+.warning-summary {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.warning-counts {
+    display: flex;
+    gap: 15px;
+    font-size: 1.2em;
+}
+
+.warning-counts span {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.speaker-alignment-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 20px;
+    margin-top: 20px;
+}
+
+.speaker-alignment-card {
+    border-radius: 8px;
+    overflow: hidden;
+}
+
+.speaker-alignment-card .card {
+    border: none;
+    box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.speaker-alignment-card.good .card-header {
+    background-color: #4CAF50;
+    color: white;
+}
+
+.speaker-alignment-card.mild .card-header {
+    background-color: #FFC107;
+    color: black;
+}
+
+.speaker-alignment-card.moderate .card-header {
+    background-color: #FF9800;
+    color: white;
+}
+
+.speaker-alignment-card.severe .card-header {
+    background-color: #F44336;
+    color: white;
+}
+
+.warning-breakdown {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.warning-type {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 8px;
+    background: #f8f9fa;
+    border-radius: 4px;
+}
+
+.warning-label {
+    color: #666;
+    font-size: 0.9em;
+}
+
+.warning-count {
+    font-weight: 500;
+}
+
+.consecutive-warnings {
+    text-align: center;
+}
+
+.alignment-score {
+    font-size: 0.9em;
+    font-weight: 500;
+}
+
+/* Minimized view specific styles */
+.size-small .topic-alignment-viz {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    position: relative;
+}
+
+.warning-indicator {
+    font-size: 0.8em;
+    margin-left: 5px;
+}
+.team-metrics {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+}
+
+.metric-item {
+    padding: 8px 12px;
+    border-radius: 6px;
+    background: #f8f9fa;
+}
+
+.metric-label {
+    font-weight: 500;
+    margin-right: 8px;
+}
+
+.metric-value {
+    font-weight: bold;
+}
+
+.warning-title {
+    color: #666;
+    margin-bottom: 10px;
+    font-size: 0.9em;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+}
+
+.topic-suggestions {
+    background: #f8f9fa;
+    border-radius: 6px;
+    padding: 12px;
+    margin-top: 15px;
+}
+
+.suggestions-title {
+    font-size: 0.9em;
+    color: #666;
+    margin-bottom: 8px;
+}
+
+.suggestion-item {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 8px;
+    padding: 8px;
+    background: white;
+    border-radius: 4px;
+    border-left: 3px solid #2196F3;
+}
+
+.suggestion-number {
+    font-weight: bold;
+    color: #2196F3;
+}
+
+.suggestion-content {
+    flex: 1;
+}
+
+.suggestion-name {
+    font-weight: 500;
+    margin-bottom: 4px;
+}
+
+.suggestion-terms {
+    font-size: 0.85em;
+    color: #666;
+}
+
+.text-success {
+    color: #4CAF50;
+}
+
+.text-warning {
+    color: #FFC107;
+}
+
+.text-danger {
+    color: #F44336;
+}
+.interaction-balance-viz {
+    flex: 0 1 300px;
+    max-width: 300px;
+    height: 200px;
+    background: #fff;
+    border-radius: 8px;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+}
+
 
 
 </style>

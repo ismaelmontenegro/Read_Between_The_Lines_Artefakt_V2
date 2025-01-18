@@ -1,6 +1,5 @@
 import os
 from collections import defaultdict
-from scipy.stats import pearsonr
 import numpy as np
 from moviepy import VideoFileClip
 from pyannote.audio import Pipeline
@@ -21,18 +20,17 @@ from sklearn.feature_extraction.text import CountVectorizer
 from sklearn.decomposition import LatentDirichletAllocation
 
 class LiveMeetingAnalyzer:
-    def __init__(self, video_path, buffer_size=12, overlap=0):
+    def __init__(self, video_path, buffer_size=12):
         self.video_path = video_path
         self.buffer_size = buffer_size
-        self.overlap = overlap
-        self.step_size = buffer_size - overlap
+        self.step_size = buffer_size
 
         self.audio_path = "temp_audio.wav"
         self.current_position = 0
         self.total_duration = None
         self.stop_processing = False
 
-        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        self.device = torch.device("cpu")
 
         # Initialize models
         self.diarization_pipeline = Pipeline.from_pretrained(
@@ -47,7 +45,7 @@ class LiveMeetingAnalyzer:
 
         # Speaker tracking
         self.speaker_embeddings = {}  # {speaker_id: embedding_vector}
-        self.embedding_threshold = 0.815  # Similarity threshold for speaker matching
+        self.embedding_threshold = 0.65  # Similarity threshold for speaker matching
         self.accumulated_results = {
             'meeting_duration': 0,
             'speaker_statistics': {},
@@ -61,9 +59,7 @@ class LiveMeetingAnalyzer:
             'interaction_balance': [],
             'topic_consensus': {},
             'response_latency': [],
-            'info_sharing_efficiency': [],
             'sentiment_alignment': [],
-            'discussion_ratios': []
         }
         self.vectorizer = None
         self.overall_model = None
@@ -80,8 +76,8 @@ class LiveMeetingAnalyzer:
         self.all_speaker_texts = {}  # All accumulated texts per speaker
         # Add vectorizer configuration
         self.vectorizer_config = {
-            'max_df': 1.0,  # Ignore terms that appear in >95% of documents
-            'min_df': 1,  # Ignore terms that appear in <2 documents
+            'max_df': 1.0,  # Ignore terms that appear in all documents
+            'min_df': 1,  # Ignore terms that appear no documents
             'max_features': 1000,
             'stop_words': self.get_custom_stop_words(),
             'token_pattern': r'\b[a-zA-Z]{2,}\b'  # Only words with 2+ characters
@@ -180,8 +176,19 @@ class LiveMeetingAnalyzer:
                 audio_segment, language="english", verbose=False, fp16=False
             )
 
+            # Apply speaker clustering periodically
+            if self.buffer_count % 10 == 0:  # Every 10 buffers
+                self.cluster_speakers()
+
+            # Filter segments based on speaker confidence
+            filtered_segments = [
+                segment for segment in segments
+                if self.calculate_speaker_confidence(segment['speaker'],
+                                                     segment['end'] - segment['start'])
+            ]
+
             # Filter out ghost speakers
-            buffer_results = self.process_transcription(segments, transcription, start_time)
+            buffer_results = self.process_transcription(filtered_segments, transcription, start_time)
             buffer_results = [result for result in buffer_results if result['text'].strip()]
 
             # Calculate turn-taking entropy
@@ -190,13 +197,13 @@ class LiveMeetingAnalyzer:
             self.calculate_team_interaction_balance(segments)
             self.calculate_topic_consensus(buffer_results)
             self.calculate_response_latency(segments)
-            self.calculate_info_sharing_efficiency(buffer_results)
 
             # Update turn-taking data in accumulated results
             self.accumulated_results['turn_taking']['window_entropies'].extend(window_entropies)
             self.accumulated_results['turn_taking']['entropy_peaks'].extend(entropy_peaks)
 
             self.update_results(buffer_results, segments)
+            self.calculate_recent_topic_alignment(buffer_results)
             self.save_results()
 
             if os.path.exists(temp_buffer_path):
@@ -210,50 +217,130 @@ class LiveMeetingAnalyzer:
             traceback.print_exc()
             return False
 
-    def match_speaker_embedding(self, audio_path, turn):
-        """Generate embeddings for the speaker and match with existing embeddings."""
+    def generate_embedding(self, audio_path, turn):
+        """Generate speaker embedding for a given audio segment"""
         try:
             # Extract audio segment for the current turn
             start = int(turn.start * 16000)
             end = int(turn.end * 16000)
             audio, sr = sf.read(audio_path, start=start, frames=end - start)
 
-            # Check if the audio is too short to process
-            if len(audio) < 16000:  # Minimum length for processing (1 second of audio at 16kHz)
-                print(f"Skipping segment {turn.start}s to {turn.end}s due to short audio.")
-                return "SPEAKER_UNKNOWN"
+            # Check if audio is too short
+            if len(audio) < 16000:  # Minimum 1 second
+                return None
 
-            # Save temporary audio file for the segment
+            # Save temporary audio segment
             temp_audio_path = "temp_segment.wav"
             sf.write(temp_audio_path, audio, sr)
 
-            # Generate speaker embedding using pyannote's Inference
-            embedding = self.inference(temp_audio_path)  # Shape: (512,)
-            print(f"Generated embedding shape: {embedding.shape}")
+            try:
+                # Generate embedding using pyannote's Inference
+                embedding = self.inference(temp_audio_path)
+                # Reshape to 2D array for distance calculations
+                embedding = embedding.reshape(1, -1)
+                return embedding
 
-            # Reshape embedding to 2D
-            embedding = embedding.reshape(1, -1)  # Now shape will be (1, 512)
-            print(f"Reshaped embedding for cdist: {embedding.shape}")
+            finally:
+                # Clean up temporary file
+                if os.path.exists(temp_audio_path):
+                    os.remove(temp_audio_path)
 
-            # Compare with existing speaker embeddings
+        except Exception as e:
+            print(f"Error generating embedding: {str(e)}")
+            return None
+
+    def match_speaker_embedding(self, audio_path, turn):
+        """Enhanced speaker matching with historical context"""
+        try:
+            # Generate current embedding
+            embedding = self.generate_embedding(audio_path, turn)
+            if embedding is None:
+                return "SPEAKER_UNKNOWN"
+
+            # Initialize tracking of recent embeddings if not exists
+            if not hasattr(self, 'recent_embeddings'):
+                self.recent_embeddings = defaultdict(list)
+                self.max_history = 5  # Keep last 5 embeddings per speaker
+
+            # Compare with existing speakers using average of recent embeddings
             best_match = None
-            best_similarity = float("inf")
-            for speaker_id, ref_embedding in self.speaker_embeddings.items():
-                # Compute cosine distance
-                similarity = cdist(embedding, ref_embedding, metric="cosine")[0, 0]
-                if similarity < best_similarity and similarity < self.embedding_threshold:
-                    best_match = speaker_id
-                    best_similarity = similarity
+            best_similarity = float('inf')
 
-            # If no match is found, create a new speaker ID
-            if not best_match:
-                best_match = f"SPEAKER_{len(self.speaker_embeddings):02d}"
-                self.speaker_embeddings[best_match] = embedding
+            for speaker_id, recent_embs in self.recent_embeddings.items():
+                if recent_embs:
+                    # Calculate average similarity across recent embeddings
+                    similarities = [
+                        cdist(embedding, ref_emb, metric="cosine")[0, 0]
+                        for ref_emb in recent_embs
+                    ]
+                    avg_similarity = np.mean(similarities)
+
+                    if avg_similarity < best_similarity and avg_similarity < self.embedding_threshold:
+                        best_similarity = avg_similarity
+                        best_match = speaker_id
+
+            # If match found, update historical embeddings
+            if best_match:
+                self.recent_embeddings[best_match].append(embedding)
+                if len(self.recent_embeddings[best_match]) > self.max_history:
+                    self.recent_embeddings[best_match].pop(0)
+                return best_match
+
+            # If no match, create new speaker
+            new_id = f"SPEAKER_{len(self.recent_embeddings):02d}"
+            self.recent_embeddings[new_id].append(embedding)
+            return new_id
+
+        except Exception as e:
+            print(f"Error in speaker matching: {e}")
+            return "SPEAKER_UNKNOWN"
+
+    def match_speaker_embedding(self, audio_path, turn):
+        """Enhanced speaker matching with historical context"""
+        try:
+            # Generate current embedding
+            embedding = self.generate_embedding(audio_path, turn)
+            if embedding is None:
+                return "SPEAKER_UNKNOWN"
+
+            # Keep track of recent matches for each speaker
+            if not hasattr(self, 'recent_embeddings'):
+                self.recent_embeddings = defaultdict(list)
+                self.max_history = 5  # Keep last 5 embeddings per speaker
+
+            # Compare with existing speakers using average of recent embeddings
+            best_match = None
+            best_similarity = float('inf')
+
+            for speaker_id, recent_embs in self.recent_embeddings.items():
+                if recent_embs:
+                    # Calculate average similarity across recent embeddings
+                    similarities = [
+                        cdist(embedding, ref_emb, metric="cosine")[0, 0]
+                        for ref_emb in recent_embs
+                    ]
+                    avg_similarity = np.mean(similarities)
+
+                    if avg_similarity < best_similarity and avg_similarity < self.embedding_threshold:
+                        best_similarity = avg_similarity
+                        best_match = speaker_id
+
+            # If match found, update historical embeddings
+            if best_match:
+                self.recent_embeddings[best_match].append(embedding)
+                if len(self.recent_embeddings[best_match]) > self.max_history:
+                    self.recent_embeddings[best_match].pop(0)
+            else:
+                # Create new speaker
+                new_id = f"SPEAKER_{len(self.recent_embeddings):02d}"
+                self.recent_embeddings[new_id].append(embedding)
+                best_match = new_id
 
             return best_match
+
         except Exception as e:
-            print(f"Error generating speaker embedding: {e}")
-            return f"SPEAKER_UNKNOWN"
+            print(f"Error in speaker matching: {e}")
+            return "SPEAKER_UNKNOWN"
 
     def process_transcription(self, segments, transcription, buffer_start):
         results = []
@@ -366,6 +453,34 @@ class LiveMeetingAnalyzer:
             'polarity': blob.sentiment.polarity,
             'subjectivity': blob.sentiment.subjectivity
         }
+
+    def is_significant_speaker(self, speaker, stats, total_time):
+        """
+        Determine if a speaker is significant based on both participation percentage
+        and minimum number of utterances.
+        """
+        # Calculate participation percentage
+        participation_percentage = (stats['speaking_time'] / total_time * 100) if total_time > 0 else 0
+
+        # Count number of utterances for this speaker
+        utterance_count = sum(1 for segment in self.accumulated_results['transcript']
+                              if segment['speaker'] == speaker)
+
+        # Speaker must meet BOTH criteria to be considered significant
+        return (participation_percentage >= 1.0 and utterance_count >= 3)
+
+    def save_results(self):
+        # Calculate total time once
+        total_time = sum(s['speaking_time'] for s in self.accumulated_results['speaker_statistics'].values())
+
+        # Identify significant speakers using both criteria
+        significant_speakers = {
+            speaker: stats for speaker, stats in self.accumulated_results['speaker_statistics'].items()
+            if self.is_significant_speaker(speaker, stats, total_time)
+        }
+
+        # Rest of the save_results method remains the same, using significant_speakers for filtering
+        ...
 
     def get_custom_stop_words(self):
         """Get extended stop words list including common filler words"""
@@ -567,6 +682,335 @@ class LiveMeetingAnalyzer:
             import traceback
             traceback.print_exc()
             return [], None, None
+
+    def calculate_recent_topic_alignment(self, buffer_results, window_size=5):
+        """
+        Calculate topic alignment based on recent utterances with enhanced warning system.
+
+        Args:
+            buffer_results: Results from current buffer
+            window_size: Number of minutes to look back for recent utterances
+        """
+        try:
+            # Initialize recent utterances tracking if not exists
+            if not hasattr(self, 'recent_utterances'):
+                self.recent_utterances = {
+                    'overall': [],
+                    'per_speaker': {}
+                }
+
+            # Initialize warning tracking if not exists
+            if not hasattr(self, 'off_topic_tracking'):
+                self.off_topic_tracking = {
+                    'consecutive_warnings': {},
+                    'last_status': {}
+                }
+
+            # Define warning level function
+            def get_warning_level(score):
+                if score >= 0.65:
+                    return None
+                elif score >= 0.5:
+                    return {
+                        'severity': 'mild',
+                        'message': 'Speaker is slightly off-topic',
+                        'score': score
+                    }
+                elif score >= 0.3:
+                    return {
+                        'severity': 'moderate',
+                        'message': 'Speaker is moderately off-topic',
+                        'score': score
+                    }
+                else:
+                    return {
+                        'severity': 'severe',
+                        'message': 'Speaker is severely off-topic',
+                        'score': score
+                    }
+
+            def get_topic_suggestion(speaker_topics, overall_topics, similarity_matrix):
+                # Find the overall topics that are least similar to speaker's current topics
+                least_discussed = []
+                for j in range(len(overall_topics)):
+                    col_max = np.max(similarity_matrix[:, j])
+                    least_discussed.append((j, col_max))
+
+                # Sort by similarity ascending (least similar first)
+                least_discussed.sort(key=lambda x: x[1])
+
+                # Get the top 2 least discussed topics
+                suggestions = []
+                for idx, _ in least_discussed[:2]:
+                    topic = overall_topics[idx]
+                    suggestions.append({
+                        'topic_name': topic['name'],
+                        'key_terms': topic['top_words'][:5]  # First 5 key terms
+                    })
+
+                return suggestions
+
+            # Get current time from the latest utterance
+            current_time = max(result['end'] for result in buffer_results)
+            cutoff_time = current_time - (window_size * 60)  # Convert minutes to seconds
+
+            # Update recent utterances with new buffer results
+            for result in buffer_results:
+                if len(result['text'].strip()) > 10:  # Only consider meaningful utterances
+                    # Add to overall recent utterances
+                    self.recent_utterances['overall'].append({
+                        'text': result['text'],
+                        'time': result['end']
+                    })
+
+                    # Add to speaker-specific recent utterances
+                    speaker = result['speaker']
+                    if speaker not in self.recent_utterances['per_speaker']:
+                        self.recent_utterances['per_speaker'][speaker] = []
+
+                    self.recent_utterances['per_speaker'][speaker].append({
+                        'text': result['text'],
+                        'time': result['end']
+                    })
+
+            # Clean up old utterances
+            self.recent_utterances['overall'] = [
+                u for u in self.recent_utterances['overall']
+                if u['time'] > cutoff_time
+            ]
+
+            for speaker in self.recent_utterances['per_speaker']:
+                self.recent_utterances['per_speaker'][speaker] = [
+                    u for u in self.recent_utterances['per_speaker'][speaker]
+                    if u['time'] > cutoff_time
+                ]
+
+            # Initialize vectorizer with current configuration
+            vectorizer = CountVectorizer(**self.vectorizer_config)
+
+            # Get recent overall texts and fit vectorizer
+            overall_texts = [u['text'] for u in self.recent_utterances['overall']]
+
+            if len(overall_texts) < 3:  # Need minimum number of utterances for meaningful analysis
+                return
+
+            # Fit vectorizer on all texts to maintain consistent vocabulary
+            vectorizer.fit(overall_texts)
+
+            # Perform topic modeling on overall recent texts
+            overall_dtm = vectorizer.transform(overall_texts)
+
+            # Adjust number of topics based on available data
+            n_topics = max(1, min(3, len(overall_texts) // 5))
+
+            overall_lda = LatentDirichletAllocation(
+                n_components=n_topics,
+                random_state=42,
+                max_iter=10,
+                learning_method='online',
+                n_jobs=-1,
+                doc_topic_prior=0.1,
+                topic_word_prior=0.1
+            )
+
+            overall_doc_topics = overall_lda.fit_transform(overall_dtm)
+            overall_topics = self.extract_topics(overall_lda, vectorizer, overall_doc_topics)
+
+            # Calculate speaker alignments
+            alignments = {}
+
+            for speaker, utterances in self.recent_utterances['per_speaker'].items():
+                speaker_texts = [u['text'] for u in utterances]
+
+                if len(speaker_texts) < 2:  # Skip if too few utterances
+                    continue
+
+                # Transform speaker texts using same vectorizer
+                speaker_dtm = vectorizer.transform(speaker_texts)
+
+                # Create and fit speaker LDA
+                speaker_lda = LatentDirichletAllocation(
+                    n_components=max(1, min(2, len(speaker_texts) // 3)),
+                    random_state=42,
+                    max_iter=10,
+                    learning_method='online',
+                    n_jobs=-1,
+                    doc_topic_prior=0.1,
+                    topic_word_prior=0.1
+                )
+
+                speaker_doc_topics = speaker_lda.fit_transform(speaker_dtm)
+                speaker_topics = self.extract_topics(speaker_lda, vectorizer, speaker_doc_topics)
+
+                # Calculate similarity between speaker and overall topics
+                similarity_matrix = cosine_similarity(
+                    speaker_lda.components_,
+                    overall_lda.components_
+                )
+
+                # Calculate average similarity across all topic pairs
+                avg_similarity = float(np.mean(similarity_matrix))
+
+                # Calculate warning level and track consecutive warnings
+                warning_info = get_warning_level(avg_similarity)
+
+                # Initialize tracking for this speaker if needed
+                if speaker not in self.off_topic_tracking['consecutive_warnings']:
+                    self.off_topic_tracking['consecutive_warnings'][speaker] = 0
+                    self.off_topic_tracking['last_status'][speaker] = None
+
+                # Update consecutive warnings
+                if warning_info:
+                    if self.off_topic_tracking['last_status'][speaker]:
+                        self.off_topic_tracking['consecutive_warnings'][speaker] += 1
+                    topic_suggestions = get_topic_suggestion(speaker_topics, overall_topics, similarity_matrix)
+                else:
+                    self.off_topic_tracking['consecutive_warnings'][speaker] = 0
+                    topic_suggestions = []
+
+                # Update last status
+                self.off_topic_tracking['last_status'][speaker] = warning_info is not None
+
+                # Find best matching topics
+                topic_matches = []
+                for i, speaker_topic in enumerate(speaker_topics):
+                    best_match_idx = np.argmax(similarity_matrix[i])
+                    similarity_score = float(similarity_matrix[i][best_match_idx])
+
+                    topic_matches.append({
+                        'speaker_topic': speaker_topic['name'],
+                        'overall_topic': overall_topics[best_match_idx]['name'],
+                        'similarity_score': similarity_score
+                    })
+
+                # Store results with enhanced warning information
+                alignments[speaker] = {
+                    'recent_alignment_score': avg_similarity,
+                    'timestamp': current_time,
+                    'speaker_topics': speaker_topics,
+                    'topic_matches': topic_matches,
+                    'warning_info': warning_info,
+                    'consecutive_warnings': self.off_topic_tracking['consecutive_warnings'][speaker],
+                    'topic_suggestions': topic_suggestions if warning_info else []
+                }
+
+            # Update accumulated results with recent alignment data
+            if 'recent_topic_alignment' not in self.accumulated_results:
+                self.accumulated_results['recent_topic_alignment'] = {
+                    'timeline': {},
+                    'current_scores': {}
+                }
+
+            # Update timeline and current scores
+            for speaker, alignment in alignments.items():
+                if speaker not in self.accumulated_results['recent_topic_alignment']['timeline']:
+                    self.accumulated_results['recent_topic_alignment']['timeline'][speaker] = []
+
+                self.accumulated_results['recent_topic_alignment']['timeline'][speaker].append({
+                    'time': alignment['timestamp'],
+                    'alignment_score': alignment['recent_alignment_score'],
+                    'topic_matches': alignment['topic_matches'],
+                    'warning_info': alignment['warning_info'],
+                    'consecutive_warnings': alignment['consecutive_warnings'],
+                    'topic_suggestions': alignment['topic_suggestions']
+                })
+
+                self.accumulated_results['recent_topic_alignment']['current_scores'][speaker] = {
+                    'score': alignment['recent_alignment_score'],
+                    'topics': alignment['speaker_topics'],
+                    'matches': alignment['topic_matches'],
+                    'warning_info': alignment['warning_info'],
+                    'consecutive_warnings': alignment['consecutive_warnings'],
+                    'topic_suggestions': alignment['topic_suggestions']
+                }
+
+        except Exception as e:
+            print(f"Error in recent topic alignment calculation: {str(e)}")
+            import traceback
+            traceback.print_exc()
+
+    def cluster_speakers(self, threshold=0.02):
+        """Merge speakers with very similar embeddings and low participation."""
+        # Get all speakers with their stats
+        speakers = self.accumulated_results['speaker_statistics']
+
+        # Add missing speaking_time_percentage for any speaker
+        total_time = sum(s['speaking_time'] for s in speakers.values())
+        for speaker, stats in speakers.items():
+            if 'speaking_time_percentage' not in stats:
+                stats['speaking_time_percentage'] = (
+                    (stats['speaking_time'] / total_time * 100) if total_time > 0 else 0
+                )
+
+        # Filter out speakers with significant participation
+        major_speakers = {s: stats for s, stats in speakers.items()
+                          if stats.get('speaking_time_percentage', 0) >= threshold * 100}
+        minor_speakers = {s: stats for s, stats in speakers.items()
+                          if stats.get('speaking_time_percentage', 0) < threshold * 100}
+
+        # For each minor speaker, try to merge with the closest major speaker
+        for minor_speaker, minor_stats in minor_speakers.items():
+            if minor_speaker in self.speaker_embeddings:
+                best_match = None
+                best_similarity = float('inf')
+
+                # Compare with major speakers
+                for major_speaker in major_speakers:
+                    if major_speaker in self.speaker_embeddings:
+                        similarity = cdist(
+                            self.speaker_embeddings[minor_speaker],
+                            self.speaker_embeddings[major_speaker],
+                            metric="cosine"
+                        )[0, 0]
+
+                        if similarity < best_similarity:
+                            best_similarity = similarity
+                            best_match = major_speaker
+
+                # Merge if a good match is found
+                if best_match and best_similarity < self.embedding_threshold:
+                    self.merge_speakers(minor_speaker, best_match)
+
+    def calculate_speaker_confidence(self, speaker_id, segment_duration):
+        """Calculate confidence score for speaker identification."""
+        if not hasattr(self, 'speaker_confidence'):
+            self.speaker_confidence = defaultdict(float)
+
+        # Base confidence on speaking time and consistency
+        if speaker_id in self.accumulated_results['speaker_statistics']:
+            stats = self.accumulated_results['speaker_statistics'][speaker_id]
+
+            # Ensure 'speaking_time_percentage' is calculated
+            total_time = sum(s['speaking_time'] for s in self.accumulated_results['speaker_statistics'].values())
+            if 'speaking_time_percentage' not in stats:
+                stats['speaking_time_percentage'] = (
+                    (stats['speaking_time'] / total_time * 100) if total_time > 0 else 0
+                )
+
+            speaking_percentage = stats['speaking_time_percentage']
+
+            # Higher confidence for speakers with more speaking time
+            time_confidence = min(speaking_percentage / 10, 1.0)  # Max out at 10% speaking time
+
+            # Consider embedding consistency if available
+            embedding_confidence = 0.0
+            if speaker_id in self.recent_embeddings and len(self.recent_embeddings[speaker_id]) > 1:
+                similarities = []
+                embeddings = self.recent_embeddings[speaker_id]
+                for i in range(len(embeddings) - 1):
+                    sim = 1 - cdist(embeddings[i], embeddings[i + 1], metric="cosine")[0, 0]
+                    similarities.append(sim)
+                embedding_confidence = np.mean(similarities)
+
+            # Combine confidence scores
+            confidence = 0.7 * time_confidence + 0.3 * embedding_confidence
+            self.speaker_confidence[speaker_id] = confidence
+
+            # Filter out low confidence speakers
+            if confidence < 0.1:  # Threshold for considering valid speaker
+                return False
+
+        return True
 
     def calculate_topic_similarity(self, speaker_model, speaker_topics):
         """Calculate similarity between speaker topics and overall meeting topics"""
@@ -945,57 +1389,13 @@ class LiveMeetingAnalyzer:
 
         if latencies:
             avg_latency = np.mean(latencies)
-            normalized_score = max(0.0, 1.0 - (avg_latency / 5.0))
+            normalized_score = max(0.0,min(1.0, 1.0 - (avg_latency / 5.0)))
 
             self.team_metrics['response_latency'].append({
                 'time': segments[-1]['end'],
                 'score': float(normalized_score)
             })
 
-    def calculate_info_sharing_efficiency(self, buffer_results):
-        """Calculate how efficiently information spreads among team members"""
-        if not buffer_results:
-            return
-
-        # Get all texts from this buffer
-        buffer_texts = [r['text'] for r in buffer_results if r['text'].strip()]
-        if len(buffer_texts) < 2:  # Need at least 2 texts to compare
-            return
-
-        try:
-            # Initialize vectorizer with less restrictive parameters
-            vectorizer = CountVectorizer(
-                max_df=1.0,  # Include all terms
-                min_df=1,  # Include terms that appear at least once
-                max_features=1000,
-                stop_words=self.get_custom_stop_words(),
-                token_pattern=r'\b[a-zA-Z]{2,}\b'  # Words with 2+ characters
-            )
-
-            # Fit vectorizer on all buffer texts
-            vectorizer.fit(buffer_texts)
-
-            # Calculate text similarity between consecutive utterances
-            similarities = []
-            for i in range(1, len(buffer_texts)):
-                vec1 = vectorizer.transform([buffer_texts[i - 1]])
-                vec2 = vectorizer.transform([buffer_texts[i]])
-
-                similarity = cosine_similarity(vec1, vec2)[0][0]
-                similarities.append(similarity)
-
-            if similarities:
-                # Higher average similarity indicates better information flow
-                efficiency_score = np.mean(similarities)
-
-                self.team_metrics['info_sharing_efficiency'].append({
-                    'time': buffer_results[-1]['end'],
-                    'score': float(efficiency_score)
-                })
-
-        except Exception as e:
-            print(f"Error calculating info sharing efficiency: {str(e)}")
-            return
 
     def calculate_sentiment_alignment(self, buffer_results):
         """Calculate sentiment alignment using existing Gini coefficient approach"""
@@ -1039,33 +1439,6 @@ class LiveMeetingAnalyzer:
 
         return alignment_score
 
-    def calculate_discussion_ratios(self, buffer_results):
-        """Calculate ratio of constructive vs negative discussions"""
-        if not buffer_results:
-            return 0.0
-
-        constructive_count = 0
-        negative_count = 0
-
-        for result in buffer_results:
-            polarity = result['sentiment']['polarity']
-            if polarity > 0.2:  # Constructive threshold
-                constructive_count += 1
-            elif polarity < -0.2:  # Negative threshold
-                negative_count += 1
-
-        total_count = constructive_count + negative_count
-        if total_count == 0:
-            ratio_score = 0.5  # Neutral score when no strong sentiments
-        else:
-            ratio_score = constructive_count / total_count
-
-        self.team_metrics['discussion_ratios'].append({
-            'time': buffer_results[-1]['end'],
-            'score': float(ratio_score)
-        })
-
-        return ratio_score
 
     def update_results(self, buffer_results, segments):
         """Update accumulated results with buffer results"""
@@ -1090,9 +1463,7 @@ class LiveMeetingAnalyzer:
         balance_score = self.calculate_team_interaction_balance(segments)
         self.calculate_topic_consensus(buffer_results)
         latency_score = self.calculate_response_latency(segments)
-        efficiency_score = self.calculate_info_sharing_efficiency(buffer_results)
         alignment_score = self.calculate_sentiment_alignment(buffer_results)
-        ratio_score = self.calculate_discussion_ratios(buffer_results)
 
         # Update accumulated team metrics
         metrics_data = {
@@ -1116,24 +1487,12 @@ class LiveMeetingAnalyzer:
                 'average_score': np.mean([entry['score'] for entry in self.team_metrics['response_latency']]) if
                 self.team_metrics['response_latency'] else 0.0
             },
-            'info_sharing_efficiency': {
-                'timeline': self.team_metrics['info_sharing_efficiency'],
-                'current_score': efficiency_score,
-                'average_score': np.mean([entry['score'] for entry in self.team_metrics['info_sharing_efficiency']]) if
-                self.team_metrics['info_sharing_efficiency'] else 0.0
-            },
             'sentiment_alignment': {
                 'timeline': self.team_metrics['sentiment_alignment'],
                 'current_score': alignment_score,
                 'average_score': np.mean([entry['score'] for entry in self.team_metrics['sentiment_alignment']]) if
                 self.team_metrics['sentiment_alignment'] else 0.0
             },
-            'discussion_ratios': {
-                'timeline': self.team_metrics['discussion_ratios'],
-                'current_score': ratio_score,
-                'average_score': np.mean([entry['score'] for entry in self.team_metrics['discussion_ratios']]) if
-                self.team_metrics['discussion_ratios'] else 0.0
-            }
         }
 
 
@@ -1290,6 +1649,12 @@ class LiveMeetingAnalyzer:
         # Calculate percentages and averages
         total_time = sum(s['speaking_time'] for s in self.accumulated_results['speaker_statistics'].values())
 
+        # Create set of significant speakers
+        significant_speakers = {
+            speaker: stats for speaker, stats in self.accumulated_results['speaker_statistics'].items()
+            if self.is_significant_speaker(speaker, stats, total_time)
+        }
+
         output_results = {'meeting_duration': self.accumulated_results['meeting_duration'], 'speaker_statistics': {},
                           'transcript': self.accumulated_results['transcript'], 'topics': {
                 'overall': self.overall_topics,
@@ -1328,14 +1693,6 @@ class LiveMeetingAnalyzer:
                     'average_score': np.mean([entry['score'] for entry in self.team_metrics['response_latency']]) if
                     self.team_metrics['response_latency'] else 0.0
                 },
-                'info_sharing_efficiency': {
-                    'timeline': self.team_metrics['info_sharing_efficiency'],
-                    'current_score': self.team_metrics['info_sharing_efficiency'][-1]['score'] if self.team_metrics[
-                        'info_sharing_efficiency'] else 0.0,
-                    'average_score': np.mean(
-                        [entry['score'] for entry in self.team_metrics['info_sharing_efficiency']]) if
-                    self.team_metrics['info_sharing_efficiency'] else 0.0
-                },
                 'sentiment_alignment': {
                     'timeline': self.team_metrics['sentiment_alignment'],
                     'current_score': self.team_metrics['sentiment_alignment'][-1]['score'] if self.team_metrics[
@@ -1343,13 +1700,6 @@ class LiveMeetingAnalyzer:
                     'average_score': np.mean([entry['score'] for entry in self.team_metrics['sentiment_alignment']]) if
                     self.team_metrics['sentiment_alignment'] else 0.0
                 },
-                'discussion_ratios': {
-                    'timeline': self.team_metrics['discussion_ratios'],
-                    'current_score': self.team_metrics['discussion_ratios'][-1]['score'] if self.team_metrics[
-                        'discussion_ratios'] else 0.0,
-                    'average_score': np.mean([entry['score'] for entry in self.team_metrics['discussion_ratios']]) if
-                    self.team_metrics['discussion_ratios'] else 0.0
-                }
             }, 'filler_analysis': {
                 'overall': {
                     'total_count': self.accumulated_results['filler_analysis']['overall_stats']['total_count'],
@@ -1399,52 +1749,135 @@ class LiveMeetingAnalyzer:
                 },
                 'per_speaker': {}
 
-            }
+            },
+                          # In your output_results dictionary
+            'recent_topic_alignment': {  # Added this section
+                'timeline': {},
+                'current_scores': {},
+                'summary': {
+                    'per_speaker': {},
+                    'team_stats': {}
+                }
+        }
 
         }
-        # Add per-speaker filler analysis
-        for speaker, stats in self.accumulated_results['filler_analysis']['speaker_stats'].items():
-            speaker_duration = self.accumulated_results['speaker_statistics'][speaker]['speaking_time']
-            speaker_duration_minutes = speaker_duration / 60 if speaker_duration > 0 else 0
+        # Add recent topic alignment data
+        if 'recent_topic_alignment' in self.accumulated_results:
+            topic_data = self.accumulated_results['recent_topic_alignment']
 
-            output_results['filler_analysis']['per_speaker'][speaker] = {
-                'total_count': stats['total_count'],
-                'rate_per_minute': (
-                    stats['total_count'] / speaker_duration_minutes
-                    if speaker_duration_minutes > 0 else 0
-                ),
-                'per_minute_timeline': [
-                    {
-                        'minute': i,
-                        'count': count
-                    } for i, count in enumerate(stats['per_minute'])
-                ],
-                'by_category': {
-                    category: {
-                        'count': count,
-                        'percentage': (
-                            count / stats['total_count'] * 100
-                            if stats['total_count'] > 0 else 0
-                        )
-                    }
-                    for category, count in stats['by_category'].items()
-                },
-                'most_common': [
-                    {
-                        'filler': filler,
-                        'count': count,
-                        'percentage': (
-                            count / stats['total_count'] * 100
-                            if stats['total_count'] > 0 else 0
-                        )
-                    }
-                    for filler, count in sorted(
-                        stats['most_common'].items(),
-                        key=lambda x: x[1],
-                        reverse=True
-                    )[:10]  # Top 10 most common fillers per speaker
-                ]
+            # Copy timeline and current scores with filtering
+            output_results['recent_topic_alignment']['timeline'] = {
+                speaker: timeline for speaker, timeline in topic_data['timeline'].items()
+                if speaker in significant_speakers
             }
+            output_results['recent_topic_alignment']['current_scores'] = {
+                speaker: scores for speaker, scores in topic_data['current_scores'].items()
+                if speaker in significant_speakers
+            }
+
+            # Generate summary statistics
+            summary = {}
+            per_speaker_summary = {}
+            all_alignment_scores = []
+            team_warnings = {
+                'total': 0,
+                'mild': 0,
+                'moderate': 0,
+                'severe': 0
+            }
+
+            # Only process significant speakers
+            for speaker, timeline in topic_data['timeline'].items():
+                if speaker in significant_speakers and timeline:  # Add significant speaker check
+                    # Rest of your existing code remains exactly the same
+                    alignment_scores = [entry['alignment_score'] for entry in timeline]
+                    all_alignment_scores.extend(alignment_scores)
+                    warnings = [entry for entry in timeline if entry.get('warning_info')]
+
+                    speaker_warnings = {
+                        'mild': len([w for w in warnings if w['warning_info']['severity'] == 'mild']),
+                        'moderate': len([w for w in warnings if w['warning_info']['severity'] == 'moderate']),
+                        'severe': len([w for w in warnings if w['warning_info']['severity'] == 'severe'])
+                    }
+
+                    team_warnings['mild'] += speaker_warnings['mild']
+                    team_warnings['moderate'] += speaker_warnings['moderate']
+                    team_warnings['severe'] += speaker_warnings['severe']
+                    team_warnings['total'] += sum(speaker_warnings.values())
+
+                    per_speaker_summary[speaker] = {
+                        'average_alignment': float(np.mean(alignment_scores)),
+                        'total_warnings': len(warnings),
+                        'warning_breakdown': speaker_warnings,
+                        'max_consecutive_warnings': max(entry['consecutive_warnings'] for entry in timeline)
+                    }
+
+            # Team stats calculation remains the same since it's already using filtered data
+            team_stats = {
+                'average_team_alignment': float(np.mean(all_alignment_scores)) if all_alignment_scores else 0.0,
+                'alignment_std': float(np.std(all_alignment_scores)) if all_alignment_scores else 0.0,
+                'warning_counts': team_warnings,
+                'warning_percentages': {
+                    'mild': (team_warnings['mild'] / team_warnings['total'] * 100) if team_warnings['total'] > 0 else 0,
+                    'moderate': (team_warnings['moderate'] / team_warnings['total'] * 100) if team_warnings[
+                                                                                                  'total'] > 0 else 0,
+                    'severe': (team_warnings['severe'] / team_warnings['total'] * 100) if team_warnings[
+                                                                                              'total'] > 0 else 0
+                },
+                'most_off_topic_speaker': max(
+                    per_speaker_summary.items(),
+                    key=lambda x: x[1]['max_consecutive_warnings']
+                )[0] if per_speaker_summary else None
+            }
+
+            output_results['recent_topic_alignment']['summary']['per_speaker'] = per_speaker_summary
+            output_results['recent_topic_alignment']['summary']['team_stats'] = team_stats
+
+        # Add per-speaker filler analysis - only for significant speakers
+        output_results['filler_analysis']['per_speaker'] = {}
+        for speaker, stats in self.accumulated_results['filler_analysis']['speaker_stats'].items():
+            if speaker in significant_speakers:
+                speaker_duration = self.accumulated_results['speaker_statistics'][speaker]['speaking_time']
+                speaker_duration_minutes = speaker_duration / 60 if speaker_duration > 0 else 0
+
+                output_results['filler_analysis']['per_speaker'][speaker] = {
+                    'total_count': stats['total_count'],
+                    'rate_per_minute': (
+                        stats['total_count'] / speaker_duration_minutes
+                        if speaker_duration_minutes > 0 else 0
+                    ),
+                    'per_minute_timeline': [
+                        {
+                            'minute': i,
+                            'count': count
+                        } for i, count in enumerate(stats['per_minute'])
+                    ],
+                    'by_category': {
+                        category: {
+                            'count': count,
+                            'percentage': (
+                                count / stats['total_count'] * 100
+                                if stats['total_count'] > 0 else 0
+                            )
+                        }
+                        for category, count in stats['by_category'].items()
+                    },
+                    'most_common': [
+                        {
+                            'filler': filler,
+                            'count': count,
+                            'percentage': (
+                                count / stats['total_count'] * 100
+                                if stats['total_count'] > 0 else 0
+                            )
+                        }
+                        for filler, count in sorted(
+                            stats['most_common'].items(),
+                            key=lambda x: x[1],
+                            reverse=True
+                        )[:10]
+                    ]
+                }
 
         # Add knowledge tracking information if available
         if 'knowledge_tracking' in self.accumulated_results:
@@ -1461,25 +1894,25 @@ class LiveMeetingAnalyzer:
                 'speaker_tracking': {}
             }
 
-            # Process speaker tracking data
+            # Process speaker tracking data - only for significant speakers
             for speaker, tracking in self.accumulated_results['knowledge_tracking']['speaker_tracking'].items():
-                coherence_values = [v['coherence'] for v in tracking['coherence_values']]
-
-                output_results['knowledge_tracking']['speaker_tracking'][speaker] = {
-                    'coherence_timeline': tracking['coherence_values'],
-                    'statistics': {
-                        'average_coherence': float(np.mean(coherence_values)) if coherence_values else 0,
-                        'max_coherence': float(np.max(coherence_values)) if coherence_values else 0,
-                        'min_coherence': float(np.min(coherence_values)) if coherence_values else 0,
-                        'final_coherence': float(coherence_values[-1]) if coherence_values else 0,
-                        'convergence_rate': float(
-                            (coherence_values[-1] - coherence_values[0]) / len(coherence_values)
-                        ) if len(coherence_values) > 1 else 0
+                if speaker in significant_speakers:  # Add this check
+                    coherence_values = [v['coherence'] for v in tracking['coherence_values']]
+                    output_results['knowledge_tracking']['speaker_tracking'][speaker] = {
+                        'coherence_timeline': tracking['coherence_values'],
+                        'statistics': {
+                            'average_coherence': float(np.mean(coherence_values)) if coherence_values else 0,
+                            'max_coherence': float(np.max(coherence_values)) if coherence_values else 0,
+                            'min_coherence': float(np.min(coherence_values)) if coherence_values else 0,
+                            'final_coherence': float(coherence_values[-1]) if coherence_values else 0,
+                            'convergence_rate': float(
+                                (coherence_values[-1] - coherence_values[0]) / len(coherence_values)
+                            ) if len(coherence_values) > 1 else 0
+                        }
                     }
-                }
 
         # Continue with existing speaker statistics
-        for speaker, stats in self.accumulated_results['speaker_statistics'].items():
+        for speaker, stats in significant_speakers.items():
             sentiment_count = stats['sentiment']['count']
             output_results['speaker_statistics'][speaker] = {
                 'speaking_time_percentage': (stats['speaking_time'] / total_time * 100) if total_time > 0 else 0,
@@ -1491,8 +1924,8 @@ class LiveMeetingAnalyzer:
                 }
             }
 
-            # Add speaker-specific topic information if available
-            if 'topics' in self.accumulated_results and 'per_speaker' in self.accumulated_results['topics']:
+        if 'topics' in self.accumulated_results and 'per_speaker' in self.accumulated_results['topics']:
+            for speaker in significant_speakers:
                 speaker_topics = self.accumulated_results['topics']['per_speaker'].get(speaker, {})
                 if speaker_topics:
                     output_results['topics']['per_speaker'][speaker] = {
@@ -1531,7 +1964,7 @@ class LiveMeetingAnalyzer:
                 self.current_position += self.step_size
 
                 # Simulate real-time processing
-                time.sleep(0.1)  # Wait for step_size seconds
+                time.sleep(5.5)
 
             print("\nAnalysis complete!")
 
