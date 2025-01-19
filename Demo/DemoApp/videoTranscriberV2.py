@@ -295,53 +295,6 @@ class LiveMeetingAnalyzer:
             print(f"Error in speaker matching: {e}")
             return "SPEAKER_UNKNOWN"
 
-    def match_speaker_embedding(self, audio_path, turn):
-        """Enhanced speaker matching with historical context"""
-        try:
-            # Generate current embedding
-            embedding = self.generate_embedding(audio_path, turn)
-            if embedding is None:
-                return "SPEAKER_UNKNOWN"
-
-            # Keep track of recent matches for each speaker
-            if not hasattr(self, 'recent_embeddings'):
-                self.recent_embeddings = defaultdict(list)
-                self.max_history = 5  # Keep last 5 embeddings per speaker
-
-            # Compare with existing speakers using average of recent embeddings
-            best_match = None
-            best_similarity = float('inf')
-
-            for speaker_id, recent_embs in self.recent_embeddings.items():
-                if recent_embs:
-                    # Calculate average similarity across recent embeddings
-                    similarities = [
-                        cdist(embedding, ref_emb, metric="cosine")[0, 0]
-                        for ref_emb in recent_embs
-                    ]
-                    avg_similarity = np.mean(similarities)
-
-                    if avg_similarity < best_similarity and avg_similarity < self.embedding_threshold:
-                        best_similarity = avg_similarity
-                        best_match = speaker_id
-
-            # If match found, update historical embeddings
-            if best_match:
-                self.recent_embeddings[best_match].append(embedding)
-                if len(self.recent_embeddings[best_match]) > self.max_history:
-                    self.recent_embeddings[best_match].pop(0)
-            else:
-                # Create new speaker
-                new_id = f"SPEAKER_{len(self.recent_embeddings):02d}"
-                self.recent_embeddings[new_id].append(embedding)
-                best_match = new_id
-
-            return best_match
-
-        except Exception as e:
-            print(f"Error in speaker matching: {e}")
-            return "SPEAKER_UNKNOWN"
-
     def process_transcription(self, segments, transcription, buffer_start):
         results = []
 
