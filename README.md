@@ -158,9 +158,8 @@ For optimal performance:
 - [oTree](https://www.otree.org/) for web framework
 - [Chart.js](https://www.chartjs.org/) and [D3.js](https://d3js.org/) for visualizations
 
-## Support
-
-For support, please open an issue in the repository or contact the development team.
+## Author
+Ismael Montenegro
 
 ## Future Development
 
