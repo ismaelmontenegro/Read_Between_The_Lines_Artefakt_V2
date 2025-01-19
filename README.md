@@ -48,9 +48,6 @@ An advanced video meeting analysis system that provides real-time insights and v
 
 ### System Requirements
 - Python 3.8+
-- CUDA-capable GPU (recommended for optimal performance)
-- 8GB+ RAM
-- 10GB+ free disk space
 
 ### Key Dependencies
 - oTree
@@ -144,11 +141,10 @@ topic_update_frequency=3
 
 For optimal performance:
 
-1. Use a CUDA-capable GPU for faster processing
-2. Adjust buffer size based on available system resources
-3. Process videos with clear audio quality
-4. Ensure proper microphone placement in recorded meetings
-5. Use recommended video formats (MP4 with H.264 encoding)
+1. Adjust buffer size based on available system resources
+2. Process videos with clear audio quality
+3. Ensure proper microphone placement in recorded meetings
+4. Use recommended video formats (MP4 with H.264 encoding)
 
 
 ## Acknowledgments
