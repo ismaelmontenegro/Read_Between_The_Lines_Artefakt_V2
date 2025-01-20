@@ -44,7 +44,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 ## Requirements
 
 ### System Requirements
-- Python 3.8+
+- Python 3.12
 
 ### Key Dependencies
 - oTree
