@@ -63,7 +63,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/meeting-analysis-dashboard.git
+git clone https://github.com/ismaelmontenegro/Read_Between_The_Lines_Artefakt_V2.git
 cd meeting-analysis-dashboard
 ```
 
