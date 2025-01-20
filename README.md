@@ -27,9 +27,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 - **Team Dynamics**
   - Participation balance
   - Response latency
-  - Information sharing efficiency
   - Topic consensus
-  - Discussion quality metrics
   - Team sentiment alignment
 
 ### Interactive Visualizations
@@ -37,7 +35,6 @@ An advanced video meeting analysis system that provides real-time insights and v
 - Speaker Distribution Polygon
 - Participation Balance Charts
 - Response Dynamics Tracking
-- Information Flow Analysis
 - Topic Distribution
 - Turn-taking Patterns
 - Meeting Objectivity Metrics
