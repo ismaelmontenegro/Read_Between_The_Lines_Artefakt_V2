@@ -41,7 +41,7 @@ class LiveMeetingAnalyzer:
             "pyannote/embedding", use_auth_token="YOUR-HF-TOKEN"
         ).to(self.device)
         self.inference = Inference(self.embedding_model, window="whole").to(self.device)
-        self.transcription_model = whisper.load_model("tiny",device="cuda")
+        self.transcription_model = whisper.load_model("tiny",device="cpu")
 
         # Speaker tracking
         self.speaker_embeddings = {}  # {speaker_id: embedding_vector}
@@ -598,8 +598,8 @@ class LiveMeetingAnalyzer:
                 max_iter=10,
                 learning_method='online',
                 n_jobs=-1,
-                doc_topic_prior=0.1,  # Changed from 0.9 to be less restrictive
-                topic_word_prior=0.1  # Changed from 0.9 to be less restrictive
+                doc_topic_prior=0.1,
+                topic_word_prior=0.1
             )
 
             # Fit the model
@@ -1379,7 +1379,7 @@ class LiveMeetingAnalyzer:
 
         # Normalize sentiments to positive values for Gini calculation
         sentiments = np.array(list(avg_sentiments.values()))
-        sentiments = sentiments + abs(min(sentiments)) + 0.01  # Ensure all positive
+        sentiments = sentiments + abs(min(sentiments)) + 0.000001  # Ensure all positive
 
         # Calculate alignment as 1 - Gini coefficient
         gini = self.calculate_gini(sentiments)
@@ -1917,7 +1917,7 @@ class LiveMeetingAnalyzer:
                 self.current_position += self.step_size
 
                 # Simulate real-time processing
-                time.sleep(5.5)
+                time.sleep(3.33)
 
             print("\nAnalysis complete!")
 
