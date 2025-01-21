@@ -4,7 +4,7 @@ pyannote.audio==3.3.2
 openai-whisper==20240930
 textblob==0.18.0.post0
 soundfile==0.12.1
-torch==2.5.1+cu124
+torch>=2.5.1
 torchaudio==2.5.1
 nltk==3.9.1
 scikit-learn==1.5.2
