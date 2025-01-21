@@ -137,6 +137,10 @@ embedding_threshold=0.65
 
 # Topic modeling update frequency
 topic_update_frequency=3
+
+# Sleep Interval after processing each buffer to simulate real-time processing (modify accordingly depending on CPU computing capacity)
+time.sleep (3.33)
+
 ```
 
 ## Performance Optimization
