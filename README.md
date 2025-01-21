@@ -133,7 +133,7 @@ buffer_size=12
 overlap=0
 
 # Speaker embedding threshold
-embedding_threshold=0.815
+embedding_threshold=0.65
 
 # Topic modeling update frequency
 topic_update_frequency=3
