@@ -1,14 +1,12 @@
-otree
-psycopg2>=2.8.4
-numpy~=2.0.2
-pandas~=2.2.3
-moviepy~=2.1.1
-pyannote.audio == 3.1.1
-transformers
-pydub
-openai-whisper
-textblob~=0.18.0.post0
-datetime~=5.5
-torch~=2.5.1
-soundfile~=0.12.1
-torchaudio
+otree==5.11.1
+moviepy==2.1.1
+pyannote.audio==3.3.2
+openai-whisper==20240930
+textblob==0.18.0.post0
+soundfile==0.12.1
+torch==2.5.1+cu124
+torchaudio==2.5.1
+nltk==3.9.1
+scikit-learn==1.5.2
+numpy==1.26.4
+scipy==1.13.1
