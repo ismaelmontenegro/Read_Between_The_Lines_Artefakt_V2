@@ -173,3 +173,13 @@ Planned features and improvements:
 - Integration with video conferencing platforms
 - Enhanced topic modeling algorithms
 - Real-time meeting monitoring capabilities
+
+## Troubleshooting
+
+If the application appears to freeze on the loading screen:
+1. Check your terminal/console for error messages
+2. Common issues include:
+   - Missing model authentication tokens
+   - Insufficient system resources
+   - Network connectivity problems when downloading models for first use
+   - SSL Certificate verification on macOS
