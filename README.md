@@ -27,9 +27,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 - **Team Dynamics**
   - Participation balance
   - Response latency
-  - Information sharing efficiency
   - Topic consensus
-  - Discussion quality metrics
   - Team sentiment alignment
 
 ### Interactive Visualizations
@@ -37,7 +35,6 @@ An advanced video meeting analysis system that provides real-time insights and v
 - Speaker Distribution Polygon
 - Participation Balance Charts
 - Response Dynamics Tracking
-- Information Flow Analysis
 - Topic Distribution
 - Turn-taking Patterns
 - Meeting Objectivity Metrics
@@ -47,7 +44,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 ## Requirements
 
 ### System Requirements
-- Python 3.8+
+- Python 3.12
 
 ### Key Dependencies
 - oTree
@@ -66,8 +63,8 @@ An advanced video meeting analysis system that provides real-time insights and v
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/meeting-analysis-dashboard.git
-cd meeting-analysis-dashboard
+git clone https://github.com/ismaelmontenegro/Read_Between_The_Lines_Artefakt_V2.git
+cd Read_Between_The_Lines_Artefakt_V2
 ```
 
 2. Create and activate a virtual environment:
