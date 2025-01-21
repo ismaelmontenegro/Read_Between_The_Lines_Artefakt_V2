@@ -4,7 +4,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 
 ## Features
 
-### Real-Time Analysis
+### Analysis
 - Speaker diarization and identification
 - Speech-to-text transcription
 - Live updating visualizations
@@ -18,7 +18,7 @@ An advanced video meeting analysis system that provides real-time insights and v
   - Individual contribution metrics
 
 - **Content Analysis**
-  - Real-time transcription
+  - Transcription
   - Topic modeling and clustering
   - Sentiment analysis
   - Filler word detection
@@ -118,7 +118,7 @@ The dashboard provides both overview and detailed analysis views:
 - **Main Video Player**: Watch the meeting recording with synchronized analytics
 - **Active Visualization**: Large, detailed view of the selected metric
 - **Minimized Views**: Quick access to other available visualizations
-- **Transcript Panel**: Real-time synchronized transcript with speaker identification
+- **Transcript Panel**: Transcript with speaker identification
 - **Analysis Controls**: Select different visualization types and control playback
 
 ## Configuration
