@@ -91,16 +91,21 @@ python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 
 ## Usage
 
-1. Start the oTree development server:
+1. Change Directory to the Demo folder:
+```bash
+cd Demo
+```
+
+2. Start the oTree development server:
 ```bash
 otree devserver
 ```
 
-2. Navigate to the application URL (typically `http://localhost:8000`)
+3. Navigate to the application URL (typically `http://localhost:8000`)
 
-3. Upload a video file through the interface
+4. Upload a video file through the interface
 
-4. The system will automatically:
+5. The system will automatically:
    - Extract audio from the video
    - Process the content in real-time
    - Generate interactive visualizations
