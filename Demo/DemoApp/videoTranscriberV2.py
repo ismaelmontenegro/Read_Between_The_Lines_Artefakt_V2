@@ -661,7 +661,7 @@ class LiveMeetingAnalyzer:
 
             # Define warning level function
             def get_warning_level(score):
-                if score >= 0.65:
+                if score >= 0.6:
                     return None
                 elif score >= 0.5:
                     return {
@@ -1779,7 +1779,7 @@ class LiveMeetingAnalyzer:
                 },
                 'most_off_topic_speaker': max(
                     per_speaker_summary.items(),
-                    key=lambda x: x[1]['max_consecutive_warnings']
+                    key=lambda x: x[1]['total_warnings']
                 )[0] if per_speaker_summary else None
             }
 
@@ -1917,7 +1917,7 @@ class LiveMeetingAnalyzer:
                 self.current_position += self.step_size
 
                 # Simulate real-time processing
-                time.sleep(3.33)
+                time.sleep(2.22)
 
             print("\nAnalysis complete!")
 
