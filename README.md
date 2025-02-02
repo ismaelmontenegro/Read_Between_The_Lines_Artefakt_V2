@@ -4,7 +4,7 @@ An advanced video meeting analysis system that provides real-time insights and v
 
 ## Features
 
-### Real-Time Analysis
+### Analysis
 - Speaker diarization and identification
 - Speech-to-text transcription
 - Live updating visualizations
@@ -18,7 +18,7 @@ An advanced video meeting analysis system that provides real-time insights and v
   - Individual contribution metrics
 
 - **Content Analysis**
-  - Real-time transcription
+  - Transcription
   - Topic modeling and clustering
   - Sentiment analysis
   - Filler word detection
@@ -91,16 +91,21 @@ python -c "import nltk; nltk.download('punkt'); nltk.download('stopwords')"
 
 ## Usage
 
-1. Start the oTree development server:
+1. Change Directory to the Demo folder:
+```bash
+cd Demo
+```
+
+2. Start the oTree development server:
 ```bash
 otree devserver
 ```
 
-2. Navigate to the application URL (typically `http://localhost:8000`)
+3. Navigate to the application URL (typically `http://localhost:8000`)
 
-3. Upload a video file through the interface
+4. Upload a video file through the interface
 
-4. The system will automatically:
+5. The system will automatically:
    - Extract audio from the video
    - Process the content in real-time
    - Generate interactive visualizations
@@ -113,7 +118,7 @@ The dashboard provides both overview and detailed analysis views:
 - **Main Video Player**: Watch the meeting recording with synchronized analytics
 - **Active Visualization**: Large, detailed view of the selected metric
 - **Minimized Views**: Quick access to other available visualizations
-- **Transcript Panel**: Real-time synchronized transcript with speaker identification
+- **Transcript Panel**: Transcript with speaker identification
 - **Analysis Controls**: Select different visualization types and control playback
 
 ## Configuration
@@ -128,10 +133,14 @@ buffer_size=12
 overlap=0
 
 # Speaker embedding threshold
-embedding_threshold=0.815
+embedding_threshold=0.65
 
 # Topic modeling update frequency
 topic_update_frequency=3
+
+# Sleep Interval after processing each buffer to simulate real-time processing (modify accordingly depending on CPU computing capacity)
+time.sleep (2.22)
+
 ```
 
 ## Performance Optimization
@@ -164,3 +173,13 @@ Planned features and improvements:
 - Integration with video conferencing platforms
 - Enhanced topic modeling algorithms
 - Real-time meeting monitoring capabilities
+
+## Troubleshooting
+
+If the application appears to freeze on the loading screen:
+1. Check your terminal/console for error messages
+2. Common issues include:
+   - Missing model authentication tokens
+   - Insufficient system resources
+   - Network connectivity problems when downloading models for first use
+   - SSL Certificate verification on macOS
